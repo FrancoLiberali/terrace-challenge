@@ -1,4 +1,24 @@
-# Business Context
+# Business Context <!-- omit from toc -->
+
+## Table of Contents <!-- omit from toc -->
+
+- [What this system does](#what-this-system-does)
+- [What is arbitrage?](#what-is-arbitrage)
+- [Why two venues exist for the same asset](#why-two-venues-exist-for-the-same-asset)
+  - [Venue A — Centralized Exchange (Binance)](#venue-a--centralized-exchange-binance)
+  - [Venue B — Decentralized Exchange (Uniswap V3)](#venue-b--decentralized-exchange-uniswap-v3)
+  - [Side-by-side](#side-by-side)
+- [Why the two prices diverge](#why-the-two-prices-diverge)
+  - [1. There is no global "true" price](#1-there-is-no-global-true-price)
+  - [2. Information propagates at different speeds](#2-information-propagates-at-different-speeds)
+  - [3. Different participants, different flows](#3-different-participants-different-flows)
+  - [4. Friction prevents instant convergence](#4-friction-prevents-instant-convergence)
+- [The role of arbitrageurs](#the-role-of-arbitrageurs)
+- [Why the Ethereum block is the system clock](#why-the-ethereum-block-is-the-system-clock)
+- [What gets detected, step by step](#what-gets-detected-step-by-step)
+- [How this maps to Terrace's business](#how-this-maps-to-terraces-business)
+
+---
 
 ## What this system does
 

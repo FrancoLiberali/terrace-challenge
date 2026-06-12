@@ -1,8 +1,24 @@
-# Known Limitations and Risks
+# Known Limitations and Risks <!-- omit from toc -->
 
-This document is intentionally explicit about what the simplified design **does not** model, what opportunities it misses, and which production-grade concerns are deferred. Calling these out is itself a senior-engineering practice: a detector that quietly hides its blind spots is more dangerous than one whose blind spots are written down.
+This document is intentionally explicit about what the simplified design **does not** model, what opportunities it misses, and which production-grade concerns are deferred.
 
 The scope of the service is **detection only**. Several limitations below would be material if the service were extended to execute trades; here they affect the interpretation of alerts but not the correctness of the detection itself.
+
+---
+
+## Table of Contents <!-- omit from toc -->
+
+- [1. Block-boundary sampling misses intra-block opportunities](#1-block-boundary-sampling-misses-intra-block-opportunities)
+- [2. Detected profit is an upper bound, not the realized P\&L](#2-detected-profit-is-an-upper-bound-not-the-realized-pl)
+- [3. The bot does not account for execution risk on the DEX side](#3-the-bot-does-not-account-for-execution-risk-on-the-dex-side)
+- [4. The public mempool exposes strategy](#4-the-public-mempool-exposes-strategy)
+- [5. Execution risk is asymmetric between the two venues](#5-execution-risk-is-asymmetric-between-the-two-venues)
+- [6. Chain reorganizations are not handled](#6-chain-reorganizations-are-not-handled)
+- [7. The detector does not model probability of inclusion or gas auctions](#7-the-detector-does-not-model-probability-of-inclusion-or-gas-auctions)
+- [8. Single-pool, single-fee-tier simplification](#8-single-pool-single-fee-tier-simplification)
+- [9. Single CEX, single DEX, single pair](#9-single-cex-single-dex-single-pair)
+- [10. The detector assumes liquidity is available at the moment of observation](#10-the-detector-assumes-liquidity-is-available-at-the-moment-of-observation)
+- [What a production trading version would add](#what-a-production-trading-version-would-add)
 
 ---
 
@@ -111,7 +127,7 @@ This means alerts during volatile periods systematically **overestimate** captur
 
 ## 8. Single-pool, single-fee-tier simplification
 
-The detector queries only the Uniswap V3 0.3% fee-tier ETH-USDC pool. In practice ETH-USDC has multiple Uniswap V3 pools at different fee tiers (0.05%, 0.3%, 1%), each with its own liquidity profile and price. A real router would query all of them and pick the best, and a real arbitrageur might split a large order across several. The detector explicitly trades off completeness for simplicity.
+The challenge's hints, expected output, and example code all point to the Uniswap V3 0.3% fee-tier ETH-USDC pool (`0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640`), and the detector follows that convention by querying only that pool. In reality ETH-USDC has multiple Uniswap V3 pools at different fee tiers (0.05%, 0.3%, 1%), each with its own liquidity profile and price. A real router would query all of them per block and pick the best effective price per trade size, and a real arbitrageur might split a large order across several pools at once. The detector adopts the challenge's implied scope and explicitly trades off completeness for simplicity.
 
 ---
 
