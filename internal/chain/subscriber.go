@@ -149,9 +149,21 @@ func (s *Subscriber) stream(ctx context.Context, sub subscription) error {
 				s.logger.Printf("chain: potential gap: missed blocks %d..%d", last+1, n-1)
 			}
 			s.lastBlock.Store(n)
+			// h.Time is uint64 (Ethereum stores block timestamps as
+			// seconds-since-epoch in an unsigned integer because the chain
+			// has no concept of "before genesis"). time.Unix takes int64
+			// because Go's time package supports pre-1970 timestamps. The
+			// cast bridges those two reasonable design choices.
+			//
+			// gosec G115 flags uint64→int64 conversions as a potential
+			// overflow. For chain timestamps it's a non-issue: int64's
+			// max is ~9.2×10¹⁸ seconds (year 292,277,026,596). Current
+			// Ethereum timestamps are ~1.7×10⁹. The overflow condition
+			// cannot occur on any plausible chain, so we suppress the
+			// warning rather than adding inert runtime bounds-checking.
 			ev := BlockEvent{
 				Number:    n,
-				Timestamp: time.Unix(int64(h.Time), 0).UTC(), //nolint:gosec // header timestamps fit comfortably in int64 for any plausible chain time
+				Timestamp: time.Unix(int64(h.Time), 0).UTC(), //nolint:gosec // see comment above
 				BaseFee:   h.BaseFee,
 			}
 			select {
