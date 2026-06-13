@@ -25,17 +25,31 @@ func TestClient_EffectivePrices(t *testing.T) {
 		if got := r.URL.Query().Get("symbol"); got != SymbolETHUSDC.Code {
 			t.Errorf("symbol param: got %q, want %q", got, SymbolETHUSDC.Code)
 		}
+		// For the configured sizes (1, 10) the density heuristic should pick
+		// the cheapest tier — verify the wire request matches.
+		if got := r.URL.Query().Get("limit"); got != "100" {
+			t.Errorf("limit param: got %q, want %q", got, "100")
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(body))
 	}))
 	defer srv.Close()
 
 	client := NewClient(srv.URL)
-	quotes, err := client.EffectivePrices(context.Background(), SymbolETHUSDC, []decimal.Decimal{dec("1"), dec("10")})
+	snap, err := client.EffectivePrices(context.Background(), SymbolETHUSDC, []decimal.Decimal{dec("1"), dec("10")})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got, want := len(quotes), 4; got != want {
+
+	// Snapshot must carry the raw top-of-book from the initial fetch.
+	if !snap.BestBid.Equal(dec("2249.50")) {
+		t.Errorf("BestBid: got %s, want 2249.50", snap.BestBid)
+	}
+	if !snap.BestAsk.Equal(dec("2250.10")) {
+		t.Errorf("BestAsk: got %s, want 2250.10", snap.BestAsk)
+	}
+
+	if got, want := len(snap.Quotes), 4; got != want {
 		t.Fatalf("quotes: got %d, want %d", got, want)
 	}
 
@@ -57,7 +71,7 @@ func TestClient_EffectivePrices(t *testing.T) {
 		{3, "10", Sell, "2249.482", "10 ETH SELL"},
 	}
 	for _, c := range checks {
-		q := quotes[c.idx]
+		q := snap.Quotes[c.idx]
 		if !q.Size.Equal(dec(c.wantSize)) {
 			t.Errorf("%s: size got %s, want %s", c.comment, q.Size, c.wantSize)
 		}
@@ -88,21 +102,21 @@ func TestClient_EffectivePrices_PerRowInsufficientDepth(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL)
-	quotes, err := client.EffectivePrices(context.Background(), SymbolETHUSDC, []decimal.Decimal{dec("10")})
+	snap, err := client.EffectivePrices(context.Background(), SymbolETHUSDC, []decimal.Decimal{dec("10")})
 	if err != nil {
 		t.Fatalf("unexpected top-level error: %v", err)
 	}
-	if len(quotes) != 2 {
-		t.Fatalf("expected 2 quotes, got %d", len(quotes))
+	if len(snap.Quotes) != 2 {
+		t.Fatalf("expected 2 quotes, got %d", len(snap.Quotes))
 	}
-	if !errors.Is(quotes[0].Err, ErrInsufficientDepth) {
-		t.Errorf("expected BUY quote to have ErrInsufficientDepth, got %v", quotes[0].Err)
+	if !errors.Is(snap.Quotes[0].Err, ErrInsufficientDepth) {
+		t.Errorf("expected BUY quote to have ErrInsufficientDepth, got %v", snap.Quotes[0].Err)
 	}
-	if quotes[1].Err != nil {
-		t.Errorf("expected SELL quote to succeed, got %v", quotes[1].Err)
+	if snap.Quotes[1].Err != nil {
+		t.Errorf("expected SELL quote to succeed, got %v", snap.Quotes[1].Err)
 	}
-	if !quotes[1].Price.Equal(dec("2249.50")) {
-		t.Errorf("SELL price: got %s, want 2249.50", quotes[1].Price)
+	if !snap.Quotes[1].Price.Equal(dec("2249.50")) {
+		t.Errorf("SELL price: got %s, want 2249.50", snap.Quotes[1].Price)
 	}
 }
 
@@ -157,11 +171,12 @@ func TestPickDepthLimit(t *testing.T) {
 }
 
 // TestClient_EffectivePrices_EscalatesAndPreservesSuccessfulQuotes verifies
-// two behaviours at once:
+// three behaviours at once:
 //   - the initial heuristic tier is escalated to a deeper tier when the
 //     orderbook turns out thinner than the per-pair density assumed;
 //   - quotes that succeeded at the initial tier are NOT recomputed against
-//     the deeper-tier data (their per-unit price stays as the first answer).
+//     the deeper-tier data (their per-unit price stays as the first answer);
+//   - the Snapshot's BestBid/BestAsk reflect the initial fetch, not later tiers.
 //
 // We provoke this by configuring an overly optimistic per-pair density so
 // pickDepthLimit picks tier 100, then have the test server return only 50 ETH
@@ -188,7 +203,7 @@ func TestClient_EffectivePrices_EscalatesAndPreservesSuccessfulQuotes(t *testing
 	// levels needed, so picks the smallest tier (100).
 	sym := Symbol{Code: "ETHUSDC", EstLiquidityPerLevel: decimal.NewFromInt(10)}
 	client := NewClient(srv.URL)
-	quotes, err := client.EffectivePrices(context.Background(), sym, []decimal.Decimal{dec("1"), dec("200")})
+	snap, err := client.EffectivePrices(context.Background(), sym, []decimal.Decimal{dec("1"), dec("200")})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -200,21 +215,29 @@ func TestClient_EffectivePrices_EscalatesAndPreservesSuccessfulQuotes(t *testing
 		t.Errorf("requested limits: got %v, want %v", requested, want)
 	}
 
+	// BestBid/BestAsk come from the FIRST fetch, not the later tier.
+	if !snap.BestBid.Equal(dec("2249")) {
+		t.Errorf("BestBid: got %s, want 2249 (from initial tier)", snap.BestBid)
+	}
+	if !snap.BestAsk.Equal(dec("2250")) {
+		t.Errorf("BestAsk: got %s, want 2250 (from initial tier)", snap.BestAsk)
+	}
+
 	// quotes[0] = Buy 1 — succeeded at tier 100; should still report 2250.
-	if !quotes[0].Price.Equal(dec("2250")) {
-		t.Errorf("Buy 1: got %s, want 2250 (preserved from tier 100)", quotes[0].Price)
+	if !snap.Quotes[0].Price.Equal(dec("2250")) {
+		t.Errorf("Buy 1: got %s, want 2250 (preserved from tier 100)", snap.Quotes[0].Price)
 	}
 	// quotes[1] = Sell 1 — same.
-	if !quotes[1].Price.Equal(dec("2249")) {
-		t.Errorf("Sell 1: got %s, want 2249 (preserved from tier 100)", quotes[1].Price)
+	if !snap.Quotes[1].Price.Equal(dec("2249")) {
+		t.Errorf("Sell 1: got %s, want 2249 (preserved from tier 100)", snap.Quotes[1].Price)
 	}
 	// quotes[2] = Buy 200 — failed at tier 100, succeeded at tier 500.
-	if !quotes[2].Price.Equal(dec("3000")) {
-		t.Errorf("Buy 200: got %s, want 3000 (from tier 500 after escalation)", quotes[2].Price)
+	if !snap.Quotes[2].Price.Equal(dec("3000")) {
+		t.Errorf("Buy 200: got %s, want 3000 (from tier 500 after escalation)", snap.Quotes[2].Price)
 	}
 	// quotes[3] = Sell 200 — same.
-	if !quotes[3].Price.Equal(dec("2999")) {
-		t.Errorf("Sell 200: got %s, want 2999 (from tier 500 after escalation)", quotes[3].Price)
+	if !snap.Quotes[3].Price.Equal(dec("2999")) {
+		t.Errorf("Sell 200: got %s, want 2999 (from tier 500 after escalation)", snap.Quotes[3].Price)
 	}
 }
 

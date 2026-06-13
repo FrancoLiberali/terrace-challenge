@@ -16,7 +16,11 @@ type Symbol struct {
 
 // Supported Binance markets. Add an entry here when extending the adapter
 // to a new pair.
+// EstLiquidityPerLevel for ETH-USDC is deliberately conservative: top-of-book
+// often shows tens of ETH per level, but the tail thins out quickly. At 5
+// ETH/level the heuristic picks the cheapest depth tier (weight=5) for the
+// configured trade sizes and only escalates when the book is genuinely thin.
 var SymbolETHUSDC = Symbol{
 	Code:                 "ETHUSDC",
-	EstLiquidityPerLevel: decimal.NewFromFloat(0.5),
+	EstLiquidityPerLevel: decimal.NewFromInt(5),
 }

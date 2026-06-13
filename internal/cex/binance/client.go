@@ -7,12 +7,19 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/shopspring/decimal"
 )
 
 // DefaultBaseURL is the production Binance Spot API endpoint.
 const DefaultBaseURL = "https://api.binance.com"
+
+// defaultHTTPTimeout is a backstop timeout applied to the underlying
+// http.Client. The caller's context deadline is the primary mechanism;
+// this is belt-and-suspenders so a missing context deadline cannot stall
+// the process indefinitely.
+const defaultHTTPTimeout = 15 * time.Second
 
 // depthLimitTiers are the Binance depth-endpoint limits, ascending in both
 // depth and rate-limit cost (weight=5/25/50 for 100/500/1000 levels per side).
@@ -44,29 +51,30 @@ func pickDepthLimit(symbol Symbol, sizes []decimal.Decimal) int {
 // thin: no rate limiting, no retries, no circuit breaking — those concerns
 // belong to wrapper layers above the adapter.
 type Client struct {
-	BaseURL string
-	HTTP    *http.Client
+	baseURL    string
+	httpClient *http.Client
 }
 
-// NewClient constructs a Client bound to the given base URL using the default
-// HTTP client. Use a test server's URL in tests.
+// NewClient constructs a Client bound to the given base URL. The HTTP client
+// has a backstop timeout; callers should still pass a context with a deadline.
 func NewClient(baseURL string) *Client {
 	return &Client{
-		BaseURL: baseURL,
-		HTTP:    &http.Client{},
+		baseURL:    baseURL,
+		httpClient: &http.Client{Timeout: defaultHTTPTimeout},
 	}
 }
 
-// EffectivePrices returns the slippage-aware effective per-unit price for
-// each (size, side) combination against the current orderbook for `symbol`.
+// EffectivePrices returns a Snapshot containing the raw top-of-book and the
+// slippage-aware effective per-unit price for each (size, side) combination
+// against the current orderbook for `symbol`.
 //
-// The returned slice has 2*len(sizes) entries — for each input size, one
+// The Quotes slice has 2*len(sizes) entries — for each input size, one
 // BUY (consuming asks) followed by one SELL (consuming bids), in input order.
 // Sizes that exceed available depth on a given side are returned with
 // Quote.Err set to ErrInsufficientDepth; the top-level error is returned
 // only if fetching the orderbook itself failed.
-func (c *Client) EffectivePrices(ctx context.Context, symbol Symbol, sizes []decimal.Decimal) ([]Quote, error) {
-	out := make([]Quote, 2*len(sizes))
+func (c *Client) EffectivePrices(ctx context.Context, symbol Symbol, sizes []decimal.Decimal) (Snapshot, error) {
+	snap := Snapshot{Quotes: make([]Quote, 2*len(sizes))}
 	pending := make([]bool, 2*len(sizes))
 	for i := range pending {
 		pending[i] = true
@@ -77,71 +85,83 @@ func (c *Client) EffectivePrices(ctx context.Context, symbol Symbol, sizes []dec
 	// still report insufficient depth — successful answers from earlier
 	// tiers are kept, not recomputed.
 	initialLimit := pickDepthLimit(symbol, sizes)
+	firstFetch := true
 	for _, limit := range depthLimitTiers {
 		if limit < initialLimit {
 			continue
 		}
 		bids, asks, err := c.fetchDepth(ctx, symbol.Code, limit)
 		if err != nil {
-			return nil, err
+			return Snapshot{}, err
+		}
+		if firstFetch {
+			snap.BestBid = topPrice(bids)
+			snap.BestAsk = topPrice(asks)
+			firstFetch = false
 		}
 		anyPending := false
 		for i, sz := range sizes {
-			if resolvePending(out, pending, 2*i, sz, Buy, asks) {
-				anyPending = true
-			}
-			if resolvePending(out, pending, 2*i+1, sz, Sell, bids) {
+			tryResolve(snap.Quotes, pending, 2*i, sz, Buy, asks)
+			tryResolve(snap.Quotes, pending, 2*i+1, sz, Sell, bids)
+			if pending[2*i] || pending[2*i+1] {
 				anyPending = true
 			}
 		}
 		if !anyPending {
-			return out, nil
+			return snap, nil
 		}
 	}
 	// Anything still pending after the deepest tier is genuinely beyond
 	// the orderbook's available depth.
 	for i, sz := range sizes {
 		if pending[2*i] {
-			out[2*i] = Quote{Size: sz, Side: Buy, Err: ErrInsufficientDepth}
+			snap.Quotes[2*i] = Quote{Size: sz, Side: Buy, Err: ErrInsufficientDepth}
 		}
 		if pending[2*i+1] {
-			out[2*i+1] = Quote{Size: sz, Side: Sell, Err: ErrInsufficientDepth}
+			snap.Quotes[2*i+1] = Quote{Size: sz, Side: Sell, Err: ErrInsufficientDepth}
 		}
 	}
-	return out, nil
+	return snap, nil
 }
 
-// resolvePending attempts to compute the quote at the given index. If it
-// succeeds (or fails with a non-depth error), the result is recorded and the
-// slot is marked done. Returns true if the slot is still pending — i.e. it
-// hit ErrInsufficientDepth and may succeed at a deeper tier.
-func resolvePending(out []Quote, pending []bool, idx int, size decimal.Decimal, side Side, levels []level) bool {
+// tryResolve attempts to compute the quote at the given index against the
+// supplied levels. If the walk succeeds, or fails with a non-depth error,
+// the result is recorded in out[idx] and pending[idx] is cleared. If the
+// walk fails with ErrInsufficientDepth, the slot is left pending so a deeper
+// tier can retry it.
+func tryResolve(out []Quote, pending []bool, idx int, size decimal.Decimal, side Side, levels []level) {
 	if !pending[idx] {
-		return false
+		return
 	}
 	price, _, err := walkOrderbook(levels, size)
 	if err == nil {
 		out[idx] = Quote{Size: size, Side: side, Price: price}
 		pending[idx] = false
-		return false
+		return
 	}
 	if !errors.Is(err, ErrInsufficientDepth) {
 		out[idx] = Quote{Size: size, Side: side, Err: err}
 		pending[idx] = false
-		return false
 	}
-	return true
+}
+
+// topPrice returns the first level's price, or decimal.Zero if levels is empty.
+func topPrice(levels []level) decimal.Decimal {
+	if len(levels) == 0 {
+		return decimal.Zero
+	}
+	return levels[0].price
 }
 
 // fetchDepth fetches the orderbook for `symbol` with at most `limit` levels
 // per side. Bids are returned highest-price first; asks lowest-price first.
 func (c *Client) fetchDepth(ctx context.Context, symbol string, limit int) (bids, asks []level, err error) {
-	url := fmt.Sprintf("%s/api/v3/depth?symbol=%s&limit=%d", c.BaseURL, symbol, limit)
+	url := fmt.Sprintf("%s/api/v3/depth?symbol=%s&limit=%d", c.baseURL, symbol, limit)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, nil, err
 	}
-	resp, err := c.HTTP.Do(req)
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, nil, err
 	}

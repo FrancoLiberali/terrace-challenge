@@ -14,11 +14,12 @@ import (
 )
 
 // Side identifies which side of an orderbook a trade consumes.
+// The zero value is intentionally invalid so an unset Side is detectable.
 type Side int
 
 const (
-	Buy  Side = iota // consumes asks (lifts offers)
-	Sell             // consumes bids (hits bids)
+	Buy  Side = iota + 1 // consumes asks (lifts offers)
+	Sell                 // consumes bids (hits bids)
 )
 
 // String returns a human-readable name for the side.
@@ -42,6 +43,17 @@ type Quote struct {
 	Side  Side
 	Price decimal.Decimal // quote-token per unit base
 	Err   error
+}
+
+// Snapshot is the unit a Client returns from a single EffectivePrices call:
+// the raw top-of-book at the moment of fetch, and the slippage-aware effective
+// quotes for the requested (size, side) combinations. BestBid / BestAsk are
+// the first-level prices observed in the initial fetch; they are zero only
+// when the corresponding side was empty in that fetch.
+type Snapshot struct {
+	BestBid decimal.Decimal
+	BestAsk decimal.Decimal
+	Quotes  []Quote
 }
 
 // ErrInsufficientDepth is returned (via Quote.Err) when the orderbook does

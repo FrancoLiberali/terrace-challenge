@@ -35,43 +35,31 @@ func run() error {
 	defer cancel()
 
 	client := binance.NewClient(binance.DefaultBaseURL)
-	quotes, err := client.EffectivePrices(ctx, binance.SymbolETHUSDC, tradeSizes)
+	snap, err := client.EffectivePrices(ctx, binance.SymbolETHUSDC, tradeSizes)
 	if err != nil {
 		return fmt.Errorf("fetch effective prices: %w", err)
 	}
-	printQuotes(os.Stdout, tradeSizes, quotes)
+	printSnapshot(os.Stdout, tradeSizes, snap)
 	return nil
 }
 
-// printQuotes renders the flat list of quotes as a per-size table.
-func printQuotes(w io.Writer, sizes []decimal.Decimal, quotes []binance.Quote) {
-	fmt.Fprintln(w, "Binance ETH-USDC effective prices (slippage-aware):")
-	fmt.Fprintf(w, "  %-14s   %-22s   %-22s\n", "Size", "BUY (eat asks)", "SELL (eat bids)")
-
-	// Group quotes by (size, side) so we can render row by row.
-	type pair struct{ buy, sell binance.Quote }
-	bySize := make(map[string]*pair, len(sizes))
-	for i := range quotes {
-		q := quotes[i]
-		key := q.Size.String()
-		p, ok := bySize[key]
-		if !ok {
-			p = &pair{}
-			bySize[key] = p
-		}
-		if q.Side == binance.Buy {
-			p.buy = q
-		} else {
-			p.sell = q
-		}
-	}
-
-	for _, sz := range sizes {
-		p := bySize[sz.String()]
-		fmt.Fprintf(w, "  %-14s   %-22s   %-22s\n",
+// printSnapshot renders the raw top-of-book and the per-size effective prices.
+// The Quotes slice is laid out as interleaved Buy/Sell rows by size (the order
+// EffectivePrices guarantees), so a direct indexed loop is enough.
+func printSnapshot(w io.Writer, sizes []decimal.Decimal, snap binance.Snapshot) {
+	fmt.Fprintln(w, "Binance ETH-USDC")
+	fmt.Fprintf(w, "  top of book: bid $%s / ask $%s (spread $%s)\n",
+		snap.BestBid.StringFixed(2),
+		snap.BestAsk.StringFixed(2),
+		snap.BestAsk.Sub(snap.BestBid).StringFixed(2),
+	)
+	fmt.Fprintln(w, "  effective prices (slippage-aware):")
+	fmt.Fprintf(w, "    %-14s   %-22s   %-22s\n", "Size", "BUY (eat asks)", "SELL (eat bids)")
+	for i, sz := range sizes {
+		fmt.Fprintf(w, "    %-14s   %-22s   %-22s\n",
 			sz.String()+" ETH",
-			formatQuote(p.buy),
-			formatQuote(p.sell),
+			formatQuote(snap.Quotes[2*i]),
+			formatQuote(snap.Quotes[2*i+1]),
 		)
 	}
 }
