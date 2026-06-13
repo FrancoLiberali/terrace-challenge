@@ -86,12 +86,12 @@ func TestClient_EffectivePrices_PerRowInsufficientDepth(t *testing.T) {
 	// level price. Both sides are tested to guard against a regression in
 	// the hand-indexed out[2*i] / out[2*i+1] layout.
 	cases := []struct {
-		name              string
-		body              string
-		failIdx, succIdx  int
-		wantSuccessPrice  string
-		wantSuccessSide   Side
-		wantFailureSide   Side
+		name             string
+		body             string
+		failIdx, succIdx int
+		wantSuccessPrice string
+		wantSuccessSide  Side
+		wantFailureSide  Side
 	}{
 		{
 			name:             "buy fails / sell succeeds",
