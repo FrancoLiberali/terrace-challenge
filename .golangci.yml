@@ -1,0 +1,137 @@
+# Adapted from https://github.com/FrancoLiberali/cql/blob/main/.golangci.yml
+# Ported to golangci-lint v2 syntax (top-level version, formatters split out,
+# misspell.ignore-rules, etc.) and trimmed to the parts that apply to this
+# repo — protobuf / gorm / sqlx / cql-gen-specific settings removed.
+
+version: "2"
+
+run:
+  timeout: 3m
+
+linters:
+  default: all
+  disable:
+    # Carried over from the source config.
+    - dogsled         # [sometimes necessary] too many blank identifiers
+    - exhaustruct     # [tedious; partial-init structs are fine]
+    - gochecknoglobals # [we use them — depthLimitTiers, SymbolETHUSDC]
+    - gochecknoinits  # [we may use them]
+    - godot           # [not necessary] comments must end with period
+    - godox           # [we use TODO/FIXME]
+    - ireturn         # [too strict for adapter shapes]
+    - nlreturn        # [too strict]
+    - nonamedreturns  # [sometimes useful; cf. fetchDepth]
+    - paralleltest    # [too many false positives]
+    - testpackage     # [doesn't allow white-box tests]
+    - thelper         # [noisy]
+    - varnamelen      # [too many false positives]
+    - recvcheck       # [too strict]
+    - wrapcheck       # [too strict]
+
+    # Disabled in this repo specifically.
+    - err113          # [Step 6] typed-error vocabulary will land with the resilience layer
+    - noinlineerr     # [disagrees with idiomatic Go] forbids `if err := f(); err != nil`
+    - wsl             # [deprecated + over-opinionated about whitespace]
+    - wsl_v5          # [same: over-opinionated about cuddling rules]
+    - gomodguard      # [deprecated since v2.12, replaced by gomodguard_v2]
+    - depguard        # [no rules defined; default policy blocks every import]
+
+  settings:
+    cyclop:
+      max-complexity: 20
+      package-average: 0.0
+    errcheck:
+      check-type-assertions: true
+      check-blank: false
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintln
+        - fmt.Fprintf
+        - (io.Closer).Close
+        - (*net/http.Response).Body.Close
+    exhaustive:
+      check:
+        - switch
+        - map
+    funlen:
+      lines: 80
+      statements: 40
+    gocritic:
+      settings:
+        captLocal:
+          paramsOnly: false
+        underef:
+          skipRecvDeref: false
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment  # too strict
+      settings:
+        shadow:
+          strict: false
+    lll:
+      line-length: 160
+      tab-width: 1
+    misspell:
+      locale: US
+      ignore-rules:
+        - cancelled
+    nolintlint:
+      allow-no-explanation: [funlen, gocognit, lll]
+      require-explanation: true
+      require-specific: true
+    unparam:
+      check-exported: false
+    gosec:
+      config:
+        global:
+          nosec: true
+          audit: true
+
+  exclusions:
+    # Pull in the v1-era broad excludes (legacy) plus the curated v2 set.
+    presets:
+      - common-false-positives
+      - legacy
+    rules:
+      # Carried-over false positive. v2 requires 2+ conditions, so scope to
+      # the analyzer that raises it.
+      - text: "composite literal uses unkeyed fields"
+        linters:
+          - govet
+      # Tests can be looser than production code — fixtures, magic numbers,
+      # inline-fmt errors are all fine in a _test.go file.
+      - path: _test\.go$
+        linters:
+          - errcheck
+          - forcetypeassert
+          - funlen
+          - goconst
+          - noctx
+          - mnd
+          - exhaustive
+          - dupl
+          - err113
+      # CLI mains legitimately use inline errors and configuration numbers.
+      - path: ^cmd/
+        linters:
+          - err113
+          - mnd
+
+formatters:
+  enable:
+    - gci
+    - gofmt
+    - goimports
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/FrancoLiberali/)
+    goimports:
+      local-prefixes:
+        - github.com/FrancoLiberali/
+
+issues:
+  max-same-issues: 0

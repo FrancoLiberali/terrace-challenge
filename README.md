@@ -1,4 +1,4 @@
-# terrace-challange
+# terrace-challenge
 
 Real-time CEX-DEX arbitrage detection between Binance and Uniswap V3 for the ETH-USDC pair, sampled on every Ethereum block. Built in Go as part of the Terrace Senior Software Engineer coding challenge.
 

@@ -19,7 +19,7 @@ For the conceptual architecture (what components exist, how they relate, the des
 ## Package layout
 
 ```
-terrace-challange/
+terrace-challenge/
 ├── cmd/
 │   └── arbd/
 │       └── main.go              # parse config, wire components, start runtime
