@@ -88,35 +88,71 @@ func TestClient_EffectivePrices(t *testing.T) {
 }
 
 func TestClient_EffectivePrices_PerRowInsufficientDepth(t *testing.T) {
-	// Asks only have 2 ETH total — a 10 ETH BUY can't be filled at any tier
-	// (the server returns the same body regardless of limit). Bids have 12
-	// ETH — a 10 ETH SELL succeeds.
-	const body = `{
-		"lastUpdateId": 1,
-		"bids": [["2249.50", "12.0"]],
-		"asks": [["2250.10", "2.0"]]
-	}`
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(body))
-	}))
-	defer srv.Close()
+	// Each case configures one side as shallow (2 ETH) and the other deep
+	// (12 ETH), then asks for a 10 ETH trade. The shallow side must fail
+	// with ErrInsufficientDepth; the deep side must succeed at its top
+	// level price. Both sides are tested to guard against a regression in
+	// the hand-indexed out[2*i] / out[2*i+1] layout.
+	cases := []struct {
+		name              string
+		body              string
+		failIdx, succIdx  int
+		wantSuccessPrice  string
+		wantSuccessSide   Side
+		wantFailureSide   Side
+	}{
+		{
+			name:             "buy fails / sell succeeds",
+			body:             `{"lastUpdateId":1,"bids":[["2249.50","12.0"]],"asks":[["2250.10","2.0"]]}`,
+			failIdx:          0,
+			succIdx:          1,
+			wantSuccessPrice: "2249.50",
+			wantSuccessSide:  Sell,
+			wantFailureSide:  Buy,
+		},
+		{
+			name:             "sell fails / buy succeeds",
+			body:             `{"lastUpdateId":1,"bids":[["2249.50","2.0"]],"asks":[["2250.10","12.0"]]}`,
+			failIdx:          1,
+			succIdx:          0,
+			wantSuccessPrice: "2250.10",
+			wantSuccessSide:  Buy,
+			wantFailureSide:  Sell,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
 
-	client := NewClient(srv.URL)
-	snap, err := client.EffectivePrices(context.Background(), SymbolETHUSDC, []decimal.Decimal{dec("10")})
-	if err != nil {
-		t.Fatalf("unexpected top-level error: %v", err)
-	}
-	if len(snap.Quotes) != 2 {
-		t.Fatalf("expected 2 quotes, got %d", len(snap.Quotes))
-	}
-	if !errors.Is(snap.Quotes[0].Err, ErrInsufficientDepth) {
-		t.Errorf("expected BUY quote to have ErrInsufficientDepth, got %v", snap.Quotes[0].Err)
-	}
-	if snap.Quotes[1].Err != nil {
-		t.Errorf("expected SELL quote to succeed, got %v", snap.Quotes[1].Err)
-	}
-	if !snap.Quotes[1].Price.Equal(dec("2249.50")) {
-		t.Errorf("SELL price: got %s, want 2249.50", snap.Quotes[1].Price)
+			client := NewClient(srv.URL)
+			snap, err := client.EffectivePrices(context.Background(), SymbolETHUSDC, []decimal.Decimal{dec("10")})
+			if err != nil {
+				t.Fatalf("unexpected top-level error: %v", err)
+			}
+			if len(snap.Quotes) != 2 {
+				t.Fatalf("expected 2 quotes, got %d", len(snap.Quotes))
+			}
+			fail := snap.Quotes[tc.failIdx]
+			if !errors.Is(fail.Err, ErrInsufficientDepth) {
+				t.Errorf("%s side: expected ErrInsufficientDepth, got %v", tc.wantFailureSide, fail.Err)
+			}
+			if fail.Side != tc.wantFailureSide {
+				t.Errorf("failing slot side: got %v, want %v", fail.Side, tc.wantFailureSide)
+			}
+			succ := snap.Quotes[tc.succIdx]
+			if succ.Err != nil {
+				t.Errorf("%s side: expected success, got %v", tc.wantSuccessSide, succ.Err)
+			}
+			if succ.Side != tc.wantSuccessSide {
+				t.Errorf("succeeding slot side: got %v, want %v", succ.Side, tc.wantSuccessSide)
+			}
+			if !succ.Price.Equal(dec(tc.wantSuccessPrice)) {
+				t.Errorf("%s price: got %s, want %s", tc.wantSuccessSide, succ.Price, tc.wantSuccessPrice)
+			}
+		})
 	}
 }
 
@@ -211,7 +247,10 @@ func TestClient_EffectivePrices_EscalatesAndPreservesSuccessfulQuotes(t *testing
 	// Two fetches expected: tier 100 (heuristic pick) and tier 500 (escalation
 	// for size=200 only — size=1 was already filled and is not re-queried).
 	want := []string{"100", "500"}
-	if len(requested) != len(want) || requested[0] != want[0] || requested[1] != want[1] {
+	if len(requested) != len(want) {
+		t.Fatalf("requested limits: got %v, want %v", requested, want)
+	}
+	if requested[0] != want[0] || requested[1] != want[1] {
 		t.Errorf("requested limits: got %v, want %v", requested, want)
 	}
 
@@ -242,8 +281,34 @@ func TestClient_EffectivePrices_EscalatesAndPreservesSuccessfulQuotes(t *testing
 }
 
 func TestParseDepthResponse_RejectsMalformedNumbers(t *testing.T) {
-	const body = `{"lastUpdateId": 1, "bids": [["not-a-number", "1"]], "asks": []}`
-	if _, _, err := parseDepthResponse(strings.NewReader(body)); err == nil {
-		t.Fatal("expected error for malformed price, got nil")
+	// One case per field × side to guard against a regression that only
+	// breaks one of the four parse paths through parseLevels.
+	cases := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "bid price",
+			body: `{"lastUpdateId":1,"bids":[["not-a-number","1"]],"asks":[]}`,
+		},
+		{
+			name: "bid size",
+			body: `{"lastUpdateId":1,"bids":[["2249.50","not-a-number"]],"asks":[]}`,
+		},
+		{
+			name: "ask price",
+			body: `{"lastUpdateId":1,"bids":[],"asks":[["not-a-number","1"]]}`,
+		},
+		{
+			name: "ask size",
+			body: `{"lastUpdateId":1,"bids":[],"asks":[["2250.10","not-a-number"]]}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, _, err := parseDepthResponse(strings.NewReader(tc.body)); err == nil {
+				t.Fatalf("expected error for malformed %s, got nil", tc.name)
+			}
+		})
 	}
 }
