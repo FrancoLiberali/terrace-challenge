@@ -23,6 +23,7 @@ go run ./cmd/probe-uniswap   # loads .env, fails if missing or ETH_RPC_URL unset
 | Variable | Used by | How to get it |
 |---|---|---|
 | `ETH_RPC_URL` | `cmd/probe-uniswap` | Free Alchemy app on Ethereum Mainnet → "Endpoints" → HTTPS URL |
+| `ETH_RPC_WS_URL` | `cmd/probe-chain` | Same Alchemy app → "Endpoints" → WSS URL |
 
 `cmd/probe-binance` needs no credentials — Binance's public REST endpoint is open.
 

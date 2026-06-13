@@ -123,6 +123,18 @@ A real trading version would have to ask: "If I submit this arbitrage tx with pr
 
 This means alerts during volatile periods systematically **overestimate** capturable profit, because the periods most likely to produce large spreads are also the periods most likely to deny inclusion to your tx (or charge you a premium for it).
 
+### What the probe currently reports as "gas price"
+
+The `cmd/probe-chain` CLI surfaces the EIP-1559 **base fee** carried in each block header — it costs zero extra RPC because the header already contains it, and it's the network-wide minimum any transaction in that block had to pay. The probe labels the column explicitly (`baseFee=… gwei`) so the value is not mistaken for the full effective gas price.
+
+The effective gas price a real transaction would pay is:
+
+```
+effectiveGasPrice = baseFee + priorityFee
+```
+
+where the priority fee (a.k.a. "tip") is set per-transaction by the sender and competes against other pending transactions for inclusion. For arbitrage cost estimation the base fee is a reasonable lower-bound proxy of the network's gas-price floor at a given moment, but a production-grade cost model would add an estimate of the priority fee competitive at the moment of submission (e.g., via `eth_feeHistory` + a percentile heuristic, or a dedicated gas oracle). This is one of the concrete extensions called out for the cost model in the Profitability Evaluator (see [`architecture.md`](./architecture.md)).
+
 ---
 
 ## 8. Single-pool, single-fee-tier simplification
