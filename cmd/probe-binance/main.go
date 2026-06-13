@@ -44,18 +44,17 @@ func run() error {
 	return nil
 }
 
-// printQuotes renders the per-size effective prices. The Quotes slice is laid
-// out as interleaved Buy/Sell rows by size (the order EffectivePrices
-// guarantees), so a direct indexed loop is enough. The smallest configured
-// size effectively reads the top of the book.
-func printQuotes(w io.Writer, sizes []decimal.Decimal, quotes []binance.Quote) {
+// printQuotes renders the per-size effective prices. Buy[i] and Sell[i]
+// correspond to sizes[i]. The smallest configured size effectively reads
+// the top of the book.
+func printQuotes(w io.Writer, sizes []decimal.Decimal, quotes binance.Quotes) {
 	fmt.Fprintln(w, "Binance ETH-USDC effective prices (slippage-aware):")
 	fmt.Fprintf(w, "  %-14s   %-22s   %-22s\n", "Size", "BUY (eat asks)", "SELL (eat bids)")
 	for i, sz := range sizes {
 		fmt.Fprintf(w, "  %-14s   %-22s   %-22s\n",
 			sz.String()+" ETH",
-			formatQuote(quotes[2*i]),
-			formatQuote(quotes[2*i+1]),
+			formatQuote(quotes.Buy[i]),
+			formatQuote(quotes.Sell[i]),
 		)
 	}
 }

@@ -69,19 +69,20 @@ func NewClient(baseURL string) *Client {
 // Sizes must be in ascending order; the per-side processing relies on that
 // invariant to exit early on the first size that exceeds available depth.
 //
-// The returned slice has 2*len(sizes) entries — for each input size, one
-// BUY (consuming asks) followed by one SELL (consuming bids), in input order.
-// Sizes that exceed available depth on a given side are returned with
+// Buy[i] and Sell[i] in the returned Quotes both refer to sizes[i]. Sizes
+// that exceed available depth on a given side are returned with
 // Quote.Err set to ErrInsufficientDepth; the top-level error is returned
 // only if fetching the orderbook itself failed.
-func (c *Client) EffectivePrices(ctx context.Context, symbol Symbol, sizes []decimal.Decimal) ([]Quote, error) {
+func (c *Client) EffectivePrices(ctx context.Context, symbol Symbol, sizes []decimal.Decimal) (Quotes, error) {
 	// Per side, an output slice keyed by input-size index and a cursor for
 	// the first index still waiting for a fill. Because sizes are ascending
 	// and the book is monotonic, the first index that doesn't fit at a
 	// given tier implies every later index also fails at that tier — so a
 	// single integer per side captures the entire pending state.
-	buy := make([]Quote, len(sizes))
-	sell := make([]Quote, len(sizes))
+	out := Quotes{
+		Buy:  make([]Quote, len(sizes)),
+		Sell: make([]Quote, len(sizes)),
+	}
 	buyFrom, sellFrom := 0, 0
 
 	initialLimit := pickDepthLimit(symbol, sizes)
@@ -94,15 +95,15 @@ func (c *Client) EffectivePrices(ctx context.Context, symbol Symbol, sizes []dec
 		}
 		bids, asks, err := c.fetchDepth(ctx, symbol.Code, limit)
 		if err != nil {
-			return nil, err
+			return Quotes{}, err
 		}
-		buyFrom = fillSide(buy, sizes, buyFrom, asks, Buy)
-		sellFrom = fillSide(sell, sizes, sellFrom, bids, Sell)
+		buyFrom = fillSide(out.Buy, sizes, buyFrom, asks, Buy)
+		sellFrom = fillSide(out.Sell, sizes, sellFrom, bids, Sell)
 	}
-	markInsufficient(buy, sizes, buyFrom, Buy)
-	markInsufficient(sell, sizes, sellFrom, Sell)
+	markInsufficient(out.Buy, sizes, buyFrom, Buy)
+	markInsufficient(out.Sell, sizes, sellFrom, Sell)
 
-	return interleave(buy, sell), nil
+	return out, nil
 }
 
 // fillSide walks `levels` for sizes[from:] in ascending order, writing the
@@ -132,17 +133,6 @@ func markInsufficient(out []Quote, sizes []decimal.Decimal, from int, side Side)
 	for i := from; i < len(sizes); i++ {
 		out[i] = Quote{Size: sizes[i], Side: side, Err: ErrInsufficientDepth}
 	}
-}
-
-// interleave merges the per-side results into the [Buy, Sell, Buy, Sell, ...]
-// layout EffectivePrices returns. buy and sell must have equal length.
-func interleave(buy, sell []Quote) []Quote {
-	out := make([]Quote, 2*len(buy)) //nolint:mnd // 2 = Buy+Sell sides per input size
-	for i := range buy {
-		out[2*i] = buy[i]
-		out[2*i+1] = sell[i]
-	}
-	return out
 }
 
 // fetchDepth fetches the orderbook for `symbol` with at most `limit` levels

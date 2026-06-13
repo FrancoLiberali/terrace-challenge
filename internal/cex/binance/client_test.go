@@ -41,40 +41,42 @@ func TestClient_EffectivePrices(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if got, want := len(quotes), 4; got != want {
-		t.Fatalf("quotes: got %d, want %d", got, want)
+	if got, want := len(quotes.Buy), 2; got != want {
+		t.Fatalf("quotes.Buy len: got %d, want %d", got, want)
+	}
+	if got, want := len(quotes.Sell), 2; got != want {
+		t.Fatalf("quotes.Sell len: got %d, want %d", got, want)
 	}
 
-	// Layout: [Buy 1, Sell 1, Buy 10, Sell 10]
+	// Buy[i] and Sell[i] correspond to sizes[i].
 	checks := []struct {
-		idx       int
+		q         Quote
 		wantSize  string
 		wantSide  Side
 		wantPrice string
 		comment   string
 	}{
 		// 1 ETH BUY eats the lowest ask: 1 ETH at 2250.10 → 2250.10
-		{0, "1", Buy, "2250.10", "1 ETH BUY"},
+		{quotes.Buy[0], "1", Buy, "2250.10", "1 ETH BUY"},
 		// 1 ETH SELL eats the highest bid: 1 ETH at 2249.50 → 2249.50
-		{1, "1", Sell, "2249.50", "1 ETH SELL"},
+		{quotes.Sell[0], "1", Sell, "2249.50", "1 ETH SELL"},
 		// 10 ETH BUY: 3.5 at 2250.10 + 6.5 at 2250.20 = 22501.65 → /10 = 2250.165
-		{2, "10", Buy, "2250.165", "10 ETH BUY"},
+		{quotes.Buy[1], "10", Buy, "2250.165", "10 ETH BUY"},
 		// 10 ETH SELL: 8.2 at 2249.50 (18445.90) + 1.8 at 2249.40 (4048.92) = 22494.82 → /10 = 2249.482
-		{3, "10", Sell, "2249.482", "10 ETH SELL"},
+		{quotes.Sell[1], "10", Sell, "2249.482", "10 ETH SELL"},
 	}
 	for _, c := range checks {
-		q := quotes[c.idx]
-		if !q.Size.Equal(dec(c.wantSize)) {
-			t.Errorf("%s: size got %s, want %s", c.comment, q.Size, c.wantSize)
+		if !c.q.Size.Equal(dec(c.wantSize)) {
+			t.Errorf("%s: size got %s, want %s", c.comment, c.q.Size, c.wantSize)
 		}
-		if q.Side != c.wantSide {
-			t.Errorf("%s: side got %v, want %v", c.comment, q.Side, c.wantSide)
+		if c.q.Side != c.wantSide {
+			t.Errorf("%s: side got %v, want %v", c.comment, c.q.Side, c.wantSide)
 		}
-		if q.Err != nil {
-			t.Errorf("%s: unexpected Err: %v", c.comment, q.Err)
+		if c.q.Err != nil {
+			t.Errorf("%s: unexpected Err: %v", c.comment, c.q.Err)
 		}
-		if !q.Price.Equal(dec(c.wantPrice)) {
-			t.Errorf("%s: price got %s, want %s", c.comment, q.Price, c.wantPrice)
+		if !c.q.Price.Equal(dec(c.wantPrice)) {
+			t.Errorf("%s: price got %s, want %s", c.comment, c.q.Price, c.wantPrice)
 		}
 	}
 }
@@ -83,33 +85,28 @@ func TestClient_EffectivePrices_PerRowInsufficientDepth(t *testing.T) {
 	// Each case configures one side as shallow (2 ETH) and the other deep
 	// (12 ETH), then asks for a 10 ETH trade. The shallow side must fail
 	// with ErrInsufficientDepth; the deep side must succeed at its top
-	// level price. Both sides are tested to guard against a regression in
-	// the hand-indexed out[2*i] / out[2*i+1] layout.
+	// level price. Both sides are tested so a regression that mixes up
+	// Buy and Sell slots fails fast.
 	cases := []struct {
-		name             string
-		body             string
-		failIdx, succIdx int
-		wantSuccessPrice string
-		wantSuccessSide  Side
-		wantFailureSide  Side
+		name      string
+		body      string
+		failSide  Side
+		succSide  Side
+		succPrice string
 	}{
 		{
-			name:             "buy fails / sell succeeds",
-			body:             `{"lastUpdateId":1,"bids":[["2249.50","12.0"]],"asks":[["2250.10","2.0"]]}`,
-			failIdx:          0,
-			succIdx:          1,
-			wantSuccessPrice: "2249.50",
-			wantSuccessSide:  Sell,
-			wantFailureSide:  Buy,
+			name:      "buy fails / sell succeeds",
+			body:      `{"lastUpdateId":1,"bids":[["2249.50","12.0"]],"asks":[["2250.10","2.0"]]}`,
+			failSide:  Buy,
+			succSide:  Sell,
+			succPrice: "2249.50",
 		},
 		{
-			name:             "sell fails / buy succeeds",
-			body:             `{"lastUpdateId":1,"bids":[["2249.50","2.0"]],"asks":[["2250.10","12.0"]]}`,
-			failIdx:          1,
-			succIdx:          0,
-			wantSuccessPrice: "2250.10",
-			wantSuccessSide:  Buy,
-			wantFailureSide:  Sell,
+			name:      "sell fails / buy succeeds",
+			body:      `{"lastUpdateId":1,"bids":[["2249.50","2.0"]],"asks":[["2250.10","12.0"]]}`,
+			failSide:  Sell,
+			succSide:  Buy,
+			succPrice: "2250.10",
 		},
 	}
 	for _, tc := range cases {
@@ -124,25 +121,27 @@ func TestClient_EffectivePrices_PerRowInsufficientDepth(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected top-level error: %v", err)
 			}
-			if len(quotes) != 2 {
-				t.Fatalf("expected 2 quotes, got %d", len(quotes))
+			if len(quotes.Buy) != 1 || len(quotes.Sell) != 1 {
+				t.Fatalf("expected one Buy and one Sell quote, got %d/%d", len(quotes.Buy), len(quotes.Sell))
 			}
-			fail := quotes[tc.failIdx]
+			fail, succ := quotes.Buy[0], quotes.Sell[0]
+			if tc.failSide == Sell {
+				fail, succ = quotes.Sell[0], quotes.Buy[0]
+			}
 			if !errors.Is(fail.Err, ErrInsufficientDepth) {
-				t.Errorf("%s side: expected ErrInsufficientDepth, got %v", tc.wantFailureSide, fail.Err)
+				t.Errorf("%s side: expected ErrInsufficientDepth, got %v", tc.failSide, fail.Err)
 			}
-			if fail.Side != tc.wantFailureSide {
-				t.Errorf("failing slot side: got %v, want %v", fail.Side, tc.wantFailureSide)
+			if fail.Side != tc.failSide {
+				t.Errorf("failing slot side: got %v, want %v", fail.Side, tc.failSide)
 			}
-			succ := quotes[tc.succIdx]
 			if succ.Err != nil {
-				t.Errorf("%s side: expected success, got %v", tc.wantSuccessSide, succ.Err)
+				t.Errorf("%s side: expected success, got %v", tc.succSide, succ.Err)
 			}
-			if succ.Side != tc.wantSuccessSide {
-				t.Errorf("succeeding slot side: got %v, want %v", succ.Side, tc.wantSuccessSide)
+			if succ.Side != tc.succSide {
+				t.Errorf("succeeding slot side: got %v, want %v", succ.Side, tc.succSide)
 			}
-			if !succ.Price.Equal(dec(tc.wantSuccessPrice)) {
-				t.Errorf("%s price: got %s, want %s", tc.wantSuccessSide, succ.Price, tc.wantSuccessPrice)
+			if !succ.Price.Equal(dec(tc.succPrice)) {
+				t.Errorf("%s price: got %s, want %s", tc.succSide, succ.Price, tc.succPrice)
 			}
 		})
 	}
@@ -245,21 +244,19 @@ func TestClient_EffectivePrices_EscalatesAndPreservesSuccessfulQuotes(t *testing
 		t.Errorf("requested limits: got %v, want %v", requested, want)
 	}
 
-	// quotes[0] = Buy 1 — succeeded at tier 100; should still report 2250.
-	if !quotes[0].Price.Equal(dec("2250")) {
-		t.Errorf("Buy 1: got %s, want 2250 (preserved from tier 100)", quotes[0].Price)
+	// Buy[0] / Sell[0] = size=1 — succeeded at tier 100; preserved from there.
+	if !quotes.Buy[0].Price.Equal(dec("2250")) {
+		t.Errorf("Buy 1: got %s, want 2250 (preserved from tier 100)", quotes.Buy[0].Price)
 	}
-	// quotes[1] = Sell 1 — same.
-	if !quotes[1].Price.Equal(dec("2249")) {
-		t.Errorf("Sell 1: got %s, want 2249 (preserved from tier 100)", quotes[1].Price)
+	if !quotes.Sell[0].Price.Equal(dec("2249")) {
+		t.Errorf("Sell 1: got %s, want 2249 (preserved from tier 100)", quotes.Sell[0].Price)
 	}
-	// quotes[2] = Buy 200 — failed at tier 100, succeeded at tier 500.
-	if !quotes[2].Price.Equal(dec("3000")) {
-		t.Errorf("Buy 200: got %s, want 3000 (from tier 500 after escalation)", quotes[2].Price)
+	// Buy[1] / Sell[1] = size=200 — failed at tier 100, succeeded at tier 500.
+	if !quotes.Buy[1].Price.Equal(dec("3000")) {
+		t.Errorf("Buy 200: got %s, want 3000 (from tier 500 after escalation)", quotes.Buy[1].Price)
 	}
-	// quotes[3] = Sell 200 — same.
-	if !quotes[3].Price.Equal(dec("2999")) {
-		t.Errorf("Sell 200: got %s, want 2999 (from tier 500 after escalation)", quotes[3].Price)
+	if !quotes.Sell[1].Price.Equal(dec("2999")) {
+		t.Errorf("Sell 200: got %s, want 2999 (from tier 500 after escalation)", quotes.Sell[1].Price)
 	}
 }
 

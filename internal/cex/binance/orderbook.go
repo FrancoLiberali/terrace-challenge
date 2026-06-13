@@ -48,6 +48,16 @@ type Quote struct {
 	Err   error
 }
 
+// Quotes holds the slippage-aware results from one EffectivePrices call,
+// organized by side. Buy[i] and Sell[i] correspond to the i-th element of
+// the input sizes slice — Buy[i] consumes the ask side at sizes[i],
+// Sell[i] consumes the bid side at sizes[i]. Both slices always have
+// len(sizes) entries.
+type Quotes struct {
+	Buy  []Quote
+	Sell []Quote
+}
+
 // ErrInsufficientDepth is returned (via Quote.Err) when the orderbook does
 // not contain enough liquidity to fill the requested trade size on a given side.
 var ErrInsufficientDepth = errors.New("insufficient orderbook depth")
