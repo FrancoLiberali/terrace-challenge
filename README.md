@@ -11,19 +11,18 @@ cp .env.example .env
 # edit .env and fill in your Alchemy URLs
 ```
 
-Every binary that needs configuration loads `.env` automatically on startup (via [godotenv](https://github.com/joho/godotenv)). Missing `.env` is not an error — values found in the real process environment always win, so `.env` is for local convenience and CI / production just sets the variables directly.
+Binaries that need configuration load `.env` automatically on startup (via [godotenv](https://github.com/joho/godotenv)) and fail fast if the file is missing — the probes are local-only diagnostic tools, not production code, so requiring `.env` is the simpler contract.
 
 ```bash
 go run ./cmd/probe-binance   # no config required
-go run ./cmd/probe-uniswap   # auto-loads .env, reads ETH_RPC_URL
+go run ./cmd/probe-uniswap   # loads .env, fails if missing or ETH_RPC_URL unset
 ```
 
 ### Required environment variables
 
 | Variable | Used by | How to get it |
 |---|---|---|
-| `ETH_RPC_URL` | `cmd/probe-uniswap` (Step 2 and beyond) | Free Alchemy app on Ethereum Mainnet → "Endpoints" → HTTPS URL |
-| `ETH_RPC_WS_URL` | `cmd/probe-chain` (Step 3 and beyond) | Same Alchemy app → "Endpoints" → WSS URL |
+| `ETH_RPC_URL` | `cmd/probe-uniswap` | Free Alchemy app on Ethereum Mainnet → "Endpoints" → HTTPS URL |
 
 `cmd/probe-binance` needs no credentials — Binance's public REST endpoint is open.
 

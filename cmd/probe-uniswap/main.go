@@ -30,19 +30,18 @@ var tradeSizes = []decimal.Decimal{
 }
 
 func main() {
-	// Best-effort .env load; absence is not an error (CI / prod will set the
-	// variable in the real environment).
-	_ = godotenv.Load()
-
 	if err := run(); err != nil {
 		log.Fatalf("probe-uniswap: %v", err)
 	}
 }
 
 func run() error {
+	if err := godotenv.Load(); err != nil {
+		return fmt.Errorf("load .env: %w", err)
+	}
 	rpcURL := os.Getenv("ETH_RPC_URL")
 	if rpcURL == "" {
-		return errors.New("ETH_RPC_URL is not set (see README.md)")
+		return errors.New("ETH_RPC_URL is not set in .env (see README.md)")
 	}
 
 	client, err := uniswapv3.NewClient(rpcURL)
