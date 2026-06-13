@@ -14,12 +14,16 @@ type Symbol struct {
 	EstLiquidityPerLevel decimal.Decimal
 }
 
-// SymbolETHUSDC is the ETH-USDC market on Binance Spot. EstLiquidityPerLevel
-// is deliberately conservative: top-of-book often shows tens of ETH per
-// level, but the tail thins out quickly. At 5 ETH/level the depth-tier
-// heuristic picks the cheapest tier (weight=5) for the configured trade
-// sizes and only escalates when the book is genuinely thin.
+// ethusdcLiquidityPerLevel is a deliberately conservative estimate of
+// base-token units per orderbook level for ETH-USDC: top-of-book often
+// shows tens of ETH per level, but the tail thins out quickly. At 5
+// ETH/level the depth-tier heuristic picks the cheapest tier (weight=5)
+// for the configured trade sizes and only escalates when the book is
+// genuinely thin.
+const ethusdcLiquidityPerLevel int64 = 5
+
+// SymbolETHUSDC is the ETH-USDC market on Binance Spot.
 var SymbolETHUSDC = Symbol{
 	Code:                 "ETHUSDC",
-	EstLiquidityPerLevel: decimal.NewFromInt(5), //nolint:mnd // see preceding comment
+	EstLiquidityPerLevel: decimal.NewFromInt(ethusdcLiquidityPerLevel),
 }
