@@ -57,8 +57,8 @@ func TestFromRawAmount(t *testing.T) {
 	}
 }
 
-// TestRoundTrip checks toRawAmount + fromRawAmount cancel for the values
-// the probe and downstream code actually use (USDC and WETH precisions).
+// TestRoundTrip checks toRawAmount + fromRawAmount cancel for the
+// precisions this package supports (USDC: 6 decimals, WETH: 18).
 func TestRoundTrip(t *testing.T) {
 	for _, in := range []string{"1", "10", "100", "1234.5678", "0.000001"} {
 		for _, decimals := range []uint8{6, 18} {

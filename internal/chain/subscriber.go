@@ -29,22 +29,16 @@ import (
 
 // BlockEvent is one block observation produced by the subscriber.
 //
-// BaseFee is the EIP-1559 base fee per gas (in wei) carried in the block
-// header — it costs zero extra RPC because the header already contains it.
-// Note this is NOT the full effective gas price a transaction would pay:
-//
-//	effectiveGasPrice = BaseFee + priorityFee
-//
-// where the priority fee (tip) is set per-transaction by the sender. For
-// arbitrage cost estimation the base fee is a reasonable lower-bound
-// proxy of the network's gas-price floor, but a production-grade cost
-// model would add an estimate of the priority fee competitive at the
-// moment of submission (see limitations.md). The probe surfaces this
-// explicitly so the reader is not misled.
+// BlockEvent is one block observation produced by the subscriber.
 type BlockEvent struct {
 	Number    uint64
 	Timestamp time.Time
-	BaseFee   *big.Int // EIP-1559 base fee in wei; never nil on post-London mainnet
+	// BaseFee is the EIP-1559 base fee per gas (in wei) from the block
+	// header. It is NOT the full effective gas price a transaction would
+	// pay (which adds a per-transaction priority fee on top); see
+	// limitations.md §7 for the cost-model implications. Never nil on
+	// post-London mainnet.
+	BaseFee *big.Int
 }
 
 // dialer abstracts the WebSocket dial + subscribe so the reconnect state
@@ -66,8 +60,8 @@ type subscription interface {
 // Connection drops are handled internally: the subscriber redials after
 // a constant delay (reconnectDelay) and resumes the subscription. A
 // gap-detection log line fires when the first block after a reconnect
-// skips one or more numbers past the last seen block — the probe does
-// not backfill those missed headers; that decision belongs upstream.
+// skips one or more numbers past the last seen block — missed headers
+// are not backfilled; that decision belongs to the consumer.
 type Subscriber struct {
 	dial dialer
 	out  chan BlockEvent
