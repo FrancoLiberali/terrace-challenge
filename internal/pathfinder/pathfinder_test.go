@@ -4,8 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"io"
-	"log"
+	"log/slog"
 	"math/big"
 	"strings"
 	"testing"
@@ -17,6 +16,16 @@ import (
 	"github.com/FrancoLiberali/terrace-challenge/internal/pipeline"
 	"github.com/FrancoLiberali/terrace-challenge/internal/pricing"
 )
+
+// captureSlog redirects slog.Default to buf for the duration of t and
+// restores the previous logger when the test ends. Used by tests that
+// inspect log output via substring assertions.
+func captureSlog(t *testing.T, buf *bytes.Buffer) {
+	t.Helper()
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+}
 
 // dec is a shorthand for tests to build decimal.Decimal from strings.
 func dec(s string) decimal.Decimal { return decimal.RequireFromString(s) }
@@ -45,13 +54,13 @@ func mkQuotes(buy1, sell1, buy10, sell10 string) pricing.Quotes {
 	}
 }
 
-// newTestPathfinder wires a Pathfinder with a custom logger so tests
-// can inspect log lines (gap warnings, dropped errors).
-func newTestPathfinder(logOut io.Writer) *Pathfinder {
+// newTestPathfinder returns a Pathfinder with a small outbound buffer.
+// Tests that want to inspect log lines call captureSlog separately to
+// redirect slog.Default into a bytes.Buffer they can grep.
+func newTestPathfinder() *Pathfinder {
 	return &Pathfinder{
 		venueQuotes: make(map[string]pricing.Quotes),
 		out:         make(chan CandidatePath, 16),
-		logger:      log.New(logOut, "", 0),
 	}
 }
 
@@ -80,7 +89,7 @@ func collectCandidates(t *testing.T, out <-chan CandidatePath) []CandidatePath {
 }
 
 func TestPathfinder_SingleVenueEmitsNoCandidates(t *testing.T) {
-	p := newTestPathfinder(io.Discard)
+	p := newTestPathfinder()
 
 	results := make(chan pipeline.VenueResult, 1)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -104,7 +113,7 @@ func TestPathfinder_SingleVenueEmitsNoCandidates(t *testing.T) {
 }
 
 func TestPathfinder_TwoVenuesEmitTwoDirectionsPerSize(t *testing.T) {
-	p := newTestPathfinder(io.Discard)
+	p := newTestPathfinder()
 
 	results := make(chan pipeline.VenueResult, 2)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -158,7 +167,8 @@ func TestPathfinder_TwoVenuesEmitTwoDirectionsPerSize(t *testing.T) {
 
 func TestPathfinder_StaleBlockDropped(t *testing.T) {
 	var logBuf bytes.Buffer
-	p := newTestPathfinder(&logBuf)
+	captureSlog(t, &logBuf)
+	p := newTestPathfinder()
 
 	results := make(chan pipeline.VenueResult, 3)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -183,13 +193,13 @@ func TestPathfinder_StaleBlockDropped(t *testing.T) {
 	cancel()
 	<-runErr
 
-	if !strings.Contains(logBuf.String(), "stale result for block 99") {
+	if !strings.Contains(logBuf.String(), "dropping stale result") || !strings.Contains(logBuf.String(), "block=99") {
 		t.Errorf("expected stale-drop log line, got: %q", logBuf.String())
 	}
 }
 
 func TestPathfinder_NewerBlockEvictsPreviousPartialState(t *testing.T) {
-	p := newTestPathfinder(io.Discard)
+	p := newTestPathfinder()
 
 	results := make(chan pipeline.VenueResult, 3)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -223,7 +233,8 @@ func TestPathfinder_NewerBlockEvictsPreviousPartialState(t *testing.T) {
 
 func TestPathfinder_VenueErrorSkipsPairing(t *testing.T) {
 	var logBuf bytes.Buffer
-	p := newTestPathfinder(&logBuf)
+	captureSlog(t, &logBuf)
+	p := newTestPathfinder()
 
 	results := make(chan pipeline.VenueResult, 3)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -252,7 +263,7 @@ func TestPathfinder_VenueErrorSkipsPairing(t *testing.T) {
 }
 
 func TestPathfinder_PerSizeErrorSkipsOnlyAffectedDirection(t *testing.T) {
-	p := newTestPathfinder(io.Discard)
+	p := newTestPathfinder()
 
 	results := make(chan pipeline.VenueResult, 2)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -296,7 +307,8 @@ func TestPathfinder_SizeSetLengthMismatchSkipsPair(t *testing.T) {
 	// and produced wrong candidates if the trailing indices were ever
 	// non-corresponding sizes).
 	var logBuf bytes.Buffer
-	p := newTestPathfinder(&logBuf)
+	captureSlog(t, &logBuf)
+	p := newTestPathfinder()
 
 	results := make(chan pipeline.VenueResult, 2)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -335,7 +347,8 @@ func TestPathfinder_PerIndexSizeMismatchSkipsThatIndexOnly(t *testing.T) {
 	// (aligned) and skip the second (mis-aligned) — not pair them as if
 	// they were the same size.
 	var logBuf bytes.Buffer
-	p := newTestPathfinder(&logBuf)
+	captureSlog(t, &logBuf)
+	p := newTestPathfinder()
 
 	results := make(chan pipeline.VenueResult, 2)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -376,13 +389,13 @@ func TestPathfinder_PerIndexSizeMismatchSkipsThatIndexOnly(t *testing.T) {
 	cancel()
 	<-runErr
 
-	if !strings.Contains(logBuf.String(), "size mismatch at index 1") {
+	if !strings.Contains(logBuf.String(), "size mismatch") || !strings.Contains(logBuf.String(), "index=1") {
 		t.Errorf("expected size-mismatch log line for index 1, got: %q", logBuf.String())
 	}
 }
 
 func TestPathfinder_StopsOnContextCancel(t *testing.T) {
-	p := newTestPathfinder(io.Discard)
+	p := newTestPathfinder()
 	results := make(chan pipeline.VenueResult)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -405,7 +418,7 @@ func TestPathfinder_StopsOnContextCancel(t *testing.T) {
 }
 
 func TestPathfinder_StopsOnResultsClose(t *testing.T) {
-	p := newTestPathfinder(io.Discard)
+	p := newTestPathfinder()
 	results := make(chan pipeline.VenueResult)
 
 	ctx := t.Context()

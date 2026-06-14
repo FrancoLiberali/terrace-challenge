@@ -3,8 +3,6 @@ package pipeline
 import (
 	"context"
 	"errors"
-	"io"
-	"log"
 	"math/big"
 	"sync"
 	"testing"
@@ -60,12 +58,11 @@ func (f *fakeSnapshotter) Snapshot(ctx context.Context, ev chain.BlockEvent) (pr
 
 // newTestDispatcher wires a Dispatcher with a tight per-block timeout so
 // the test suite runs fast even when ctx-deadline paths are exercised.
-func newTestDispatcher(venues map[string]Snapshotter, logOut io.Writer) *Dispatcher {
+func newTestDispatcher(venues map[string]Snapshotter) *Dispatcher {
 	return &Dispatcher{
 		venues:  venues,
 		timeout: 500 * time.Millisecond,
 		out:     make(chan VenueResult, 4), // small buffer to decouple test reads
-		logger:  log.New(logOut, "", 0),
 	}
 }
 
@@ -83,7 +80,7 @@ func TestDispatcher_StreamsVenueResults(t *testing.T) {
 
 	cex := &fakeSnapshotter{quotes: cexQ}
 	dex := &fakeSnapshotter{quotes: dexQ}
-	disp := newTestDispatcher(map[string]Snapshotter{"binance": cex, "uniswap": dex}, io.Discard)
+	disp := newTestDispatcher(map[string]Snapshotter{"binance": cex, "uniswap": dex})
 
 	events := make(chan chain.BlockEvent, 1)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -137,7 +134,7 @@ func TestDispatcher_EmitsErrorsAsResults(t *testing.T) {
 	dexErr := errors.New("rpc rate limited")
 	cex := &fakeSnapshotter{err: cexErr}
 	dex := &fakeSnapshotter{err: dexErr}
-	disp := newTestDispatcher(map[string]Snapshotter{"binance": cex, "uniswap": dex}, io.Discard)
+	disp := newTestDispatcher(map[string]Snapshotter{"binance": cex, "uniswap": dex})
 
 	events := make(chan chain.BlockEvent, 1)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -178,7 +175,7 @@ func TestDispatcher_FastVenueDoesNotWaitForSlowOne(t *testing.T) {
 	hold := make(chan struct{})
 	fast := &fakeSnapshotter{quotes: fastQ}
 	slow := &fakeSnapshotter{quotes: slowQ, block: hold}
-	disp := newTestDispatcher(map[string]Snapshotter{"fast": fast, "slow": slow}, io.Discard)
+	disp := newTestDispatcher(map[string]Snapshotter{"fast": fast, "slow": slow})
 
 	events := make(chan chain.BlockEvent, 1)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -232,7 +229,7 @@ func TestDispatcher_EmitsForBothBlocksWhenSecondArrivesMidFlight(t *testing.T) {
 
 	cex := &fakeSnapshotter{quotes: cexQ, block: hold, started: cexStarted}
 	dex := &fakeSnapshotter{quotes: dexQ, block: hold, started: dexStarted}
-	disp := newTestDispatcher(map[string]Snapshotter{"binance": cex, "uniswap": dex}, io.Discard)
+	disp := newTestDispatcher(map[string]Snapshotter{"binance": cex, "uniswap": dex})
 
 	events := make(chan chain.BlockEvent)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -281,7 +278,7 @@ func TestDispatcher_EmitsForBothBlocksWhenSecondArrivesMidFlight(t *testing.T) {
 func TestDispatcher_StopsOnContextCancel(t *testing.T) {
 	cex := &fakeSnapshotter{}
 	dex := &fakeSnapshotter{}
-	disp := newTestDispatcher(map[string]Snapshotter{"binance": cex, "uniswap": dex}, io.Discard)
+	disp := newTestDispatcher(map[string]Snapshotter{"binance": cex, "uniswap": dex})
 
 	events := make(chan chain.BlockEvent)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -306,7 +303,7 @@ func TestDispatcher_StopsOnContextCancel(t *testing.T) {
 func TestDispatcher_StopsOnEventsClose(t *testing.T) {
 	cex := &fakeSnapshotter{}
 	dex := &fakeSnapshotter{}
-	disp := newTestDispatcher(map[string]Snapshotter{"binance": cex, "uniswap": dex}, io.Discard)
+	disp := newTestDispatcher(map[string]Snapshotter{"binance": cex, "uniswap": dex})
 
 	events := make(chan chain.BlockEvent)
 	ctx := t.Context()

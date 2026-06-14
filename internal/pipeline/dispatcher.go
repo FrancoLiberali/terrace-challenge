@@ -7,7 +7,6 @@ package pipeline
 
 import (
 	"context"
-	"log"
 	"sync"
 	"time"
 
@@ -38,7 +37,6 @@ type Dispatcher struct {
 	venues  map[string]Snapshotter
 	timeout time.Duration // per-call deadline; tests override directly
 	out     chan VenueResult
-	logger  *log.Logger
 }
 
 const defaultCallTimeout = 8 * time.Second
@@ -50,7 +48,6 @@ func NewDispatcher(venues map[string]Snapshotter) *Dispatcher {
 		venues:  venues,
 		timeout: defaultCallTimeout,
 		out:     make(chan VenueResult),
-		logger:  log.Default(),
 	}
 }
 

@@ -18,7 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"math/big"
 	"time"
 
@@ -68,8 +68,6 @@ type Subscriber struct {
 	// sets a sane default; tests in this package override it directly to
 	// keep the suite fast.
 	reconnectDelay time.Duration
-
-	logger *log.Logger
 }
 
 const defaultReconnectDelay = 1 * time.Second
@@ -81,7 +79,6 @@ func NewSubscriber(wsURL string) *Subscriber {
 		dial:           &ethDialer{url: wsURL},
 		out:            make(chan BlockEvent),
 		reconnectDelay: defaultReconnectDelay,
-		logger:         log.Default(),
 	}
 }
 
@@ -126,7 +123,7 @@ func (s *Subscriber) Run(ctx context.Context) error {
 		// and the next dial often succeeds immediately. The
 		// reconnectDelay only applies to *dial-failure* retries inside
 		// dialWithRetry.
-		s.logger.Printf("chain: subscription dropped: %v; reconnecting", err)
+		slog.Warn("subscription dropped — reconnecting", "err", err)
 	}
 }
 
@@ -150,7 +147,7 @@ func (s *Subscriber) dialWithRetry(ctx context.Context) (subscription, error) {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return nil, err
 		}
-		s.logger.Printf("chain: dial failed: %v; retrying in %v", err, s.reconnectDelay)
+		slog.Warn("dial failed — retrying", "err", err, "delay", s.reconnectDelay)
 		// sleepCtx returns false if ctx fires before the delay elapses,
 		// meaning the consumer cancelled mid-backoff — bow out with the
 		// ctx error rather than redialing.

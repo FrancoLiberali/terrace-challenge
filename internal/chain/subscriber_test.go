@@ -4,8 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"io"
-	"log"
+	"log/slog"
 	"math/big"
 	"strings"
 	"sync"
@@ -14,6 +13,16 @@ import (
 
 	"github.com/ethereum/go-ethereum/core/types"
 )
+
+// captureSlog redirects slog.Default to buf for the duration of t and
+// restores the previous logger when the test ends. Used by tests that
+// inspect log output via substring assertions.
+func captureSlog(t *testing.T, buf *bytes.Buffer) {
+	t.Helper()
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+}
 
 // fakeSubscription is the in-memory sub a test feeds into the Subscriber.
 // Headers() and Err() drive what the stream loop sees; Close records that
@@ -86,12 +95,11 @@ func (f *fakeDialer) dials() int {
 
 // newTestSubscriber wires a Subscriber with a fake dialer and a tiny
 // reconnect delay so the dial-retry path runs instantly.
-func newTestSubscriber(d *fakeDialer, logOut io.Writer) *Subscriber {
+func newTestSubscriber(d *fakeDialer) *Subscriber {
 	return &Subscriber{
 		dial:           d,
 		out:            make(chan BlockEvent, 8),
 		reconnectDelay: 1 * time.Millisecond,
-		logger:         log.New(logOut, "", 0),
 	}
 }
 
@@ -109,7 +117,7 @@ func TestSubscriber_EmitsBlocks(t *testing.T) {
 	sub.headers <- header(101, 1_700_000_012, 26_000_000_000)
 
 	d := &fakeDialer{plan: []dialStep{{sub: sub}}}
-	s := newTestSubscriber(d, io.Discard)
+	s := newTestSubscriber(d)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -150,7 +158,8 @@ func TestSubscriber_ReconnectsAfterDrop(t *testing.T) {
 
 	d := &fakeDialer{plan: []dialStep{{sub: first}, {sub: second}}}
 	var logBuf bytes.Buffer
-	s := newTestSubscriber(d, &logBuf)
+	captureSlog(t, &logBuf)
+	s := newTestSubscriber(d)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -189,7 +198,8 @@ func TestSubscriber_RetriesAfterDialFailures(t *testing.T) {
 		{sub: good},
 	}}
 	var logBuf bytes.Buffer
-	s := newTestSubscriber(d, &logBuf)
+	captureSlog(t, &logBuf)
+	s := newTestSubscriber(d)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -219,7 +229,7 @@ func TestSubscriber_RetriesAfterDialFailures(t *testing.T) {
 func TestSubscriber_StopsOnContextCancel(t *testing.T) {
 	// No subs queued; dialer blocks on ctx after the plan is exhausted.
 	d := &fakeDialer{}
-	s := newTestSubscriber(d, io.Discard)
+	s := newTestSubscriber(d)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)

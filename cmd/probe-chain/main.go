@@ -14,7 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"math/big"
 	"os"
 	"os/signal"
@@ -27,7 +27,8 @@ import (
 
 func main() {
 	if err := run(); err != nil {
-		log.Fatalf("probe-chain: %v", err)
+		slog.Error("probe-chain exiting with error", "err", err)
+		os.Exit(1)
 	}
 }
 

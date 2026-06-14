@@ -10,7 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"time"
 
@@ -31,7 +31,8 @@ var tradeSizes = []decimal.Decimal{
 
 func main() {
 	if err := run(); err != nil {
-		log.Fatalf("probe-uniswap: %v", err)
+		slog.Error("probe-uniswap exiting with error", "err", err)
+		os.Exit(1)
 	}
 }
 

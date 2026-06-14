@@ -15,7 +15,7 @@ package pathfinder
 
 import (
 	"context"
-	"log"
+	"log/slog"
 
 	"github.com/shopspring/decimal"
 
@@ -59,8 +59,7 @@ type Pathfinder struct {
 	currentBlock uint64
 	venueQuotes  map[string]pricing.Quotes
 
-	out    chan CandidatePath
-	logger *log.Logger
+	out chan CandidatePath
 }
 
 // NewPathfinder returns a Pathfinder ready to be driven by Run.
@@ -69,7 +68,6 @@ func NewPathfinder() *Pathfinder {
 	return &Pathfinder{
 		venueQuotes: make(map[string]pricing.Quotes),
 		out:         make(chan CandidatePath),
-		logger:      log.Default(),
 	}
 }
 
@@ -106,8 +104,7 @@ func (p *Pathfinder) handle(ctx context.Context, r pipeline.VenueResult) {
 	// Freshness filter: drop results whose block is older than the
 	// freshest we have started pairing for.
 	if n < p.currentBlock {
-		p.logger.Printf("pathfinder: dropping stale result for block %d (current %d, venue %s)",
-			n, p.currentBlock, r.Venue)
+		slog.Warn("dropping stale result", "block", n, "current", p.currentBlock, "venue", r.Venue)
 		return
 	}
 	// A fresher block evicts the previous block's partial state.
@@ -121,8 +118,7 @@ func (p *Pathfinder) handle(ctx context.Context, r pipeline.VenueResult) {
 	// move on. Other venues for the same block can still pair among
 	// themselves.
 	if r.Err != nil {
-		p.logger.Printf("pathfinder: skipping venue %s for block %d due to error: %v",
-			r.Venue, n, r.Err)
+		slog.Warn("skipping venue due to error", "venue", r.Venue, "block", n, "err", r.Err)
 		return
 	}
 
@@ -150,15 +146,19 @@ func (p *Pathfinder) handle(ctx context.Context, r pipeline.VenueResult) {
 // shortcut) would have masked mis-paired candidates.
 func (p *Pathfinder) emitPairs(ctx context.Context, r pipeline.VenueResult, otherVenue string, otherQuotes pricing.Quotes) {
 	if len(r.Quotes.Buy) != len(otherQuotes.Buy) {
-		p.logger.Printf("pathfinder: size-set length mismatch at block %d between %s (%d) and %s (%d) — skipping pair",
-			r.Block.Number, r.Venue, len(r.Quotes.Buy), otherVenue, len(otherQuotes.Buy))
+		slog.Error("size-set length mismatch — skipping pair",
+			"block", r.Block.Number,
+			"venue_a", r.Venue, "len_a", len(r.Quotes.Buy),
+			"venue_b", otherVenue, "len_b", len(otherQuotes.Buy))
 		return
 	}
 	for i := range r.Quotes.Buy {
 		size := r.Quotes.Buy[i].Size
 		if !size.Equal(otherQuotes.Buy[i].Size) {
-			p.logger.Printf("pathfinder: size mismatch at index %d between %s (%s) and %s (%s) at block %d — skipping",
-				i, r.Venue, size, otherVenue, otherQuotes.Buy[i].Size, r.Block.Number)
+			slog.Error("size mismatch — skipping index",
+				"index", i, "block", r.Block.Number,
+				"venue_a", r.Venue, "size_a", size,
+				"venue_b", otherVenue, "size_b", otherQuotes.Buy[i].Size)
 			continue
 		}
 

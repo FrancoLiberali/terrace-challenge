@@ -8,7 +8,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"time"
 
@@ -28,7 +28,8 @@ var tradeSizes = []decimal.Decimal{
 
 func main() {
 	if err := run(); err != nil {
-		log.Fatalf("probe-binance: %v", err)
+		slog.Error("probe-binance exiting with error", "err", err)
+		os.Exit(1)
 	}
 }
 
