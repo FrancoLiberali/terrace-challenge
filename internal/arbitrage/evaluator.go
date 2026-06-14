@@ -12,17 +12,16 @@ import (
 	"github.com/FrancoLiberali/terrace-challenge/internal/pathfinder"
 )
 
-// CostModel parameterises the profitability calculation.
+// CostModel parameterises the profitability calculation. Gas units come
+// from each CandidatePath itself (the adapter populates them per call —
+// QuoterV2 returns a per-quote estimate), so the model does not need a
+// global GasUnitsPerSwap.
 type CostModel struct {
 	// VenueFeeBps maps a venue name to its taker fee in basis points.
 	// Binance spot is 10 bps (0.1%); a venue not in the map is treated
 	// as fee-free at this layer (the DEX's 0.3% pool fee is already
 	// embedded in the QuoterV2 output and is NOT included here).
 	VenueFeeBps map[string]int
-
-	// GasUnitsPerSwap is the gas estimate for the on-chain leg
-	// (one Uniswap V3 swap ≈ 150,000 units).
-	GasUnitsPerSwap uint64
 
 	// MinNetProfitUSDC is the threshold IsProfitable compares NetProfit
 	// against. Decimal so callers can set fractional thresholds.
@@ -78,7 +77,10 @@ func (e *Evaluator) Evaluate(path pathfinder.CandidatePath) Opportunity {
 
 	// Gas cost: gasUnits × baseFee → wei → ETH → USDC (valued at
 	// BuyPrice as a reasonable per-block ETH→USDC reference).
-	gasUSDC := e.gasCostUSDC(path.Block.BaseFee, path.BuyPrice)
+	// gasUnits comes from the candidate itself: the adapter populates
+	// it per-quote (QuoterV2 returns one), and the Pathfinder sums the
+	// two legs into CandidatePath.GasEstimate.
+	gasUSDC := gasCostUSDC(path.GasEstimate, path.Block.BaseFee, path.BuyPrice)
 
 	netProfit := grossProfit.Sub(tradingFees).Sub(gasUSDC)
 
@@ -122,11 +124,14 @@ func (e *Evaluator) venueFee(venue string, notional decimal.Decimal) decimal.Dec
 // ETH-in-USDC price as the reference. BaseFee is the EIP-1559 minimum;
 // this systematically underestimates the true cost because it ignores
 // the priority fee (see limitations.md §7).
-func (e *Evaluator) gasCostUSDC(baseFeeWei *big.Int, ethPrice decimal.Decimal) decimal.Decimal {
-	if baseFeeWei == nil {
+//
+// Returns zero when gasUnits is 0 (off-chain venue path) or baseFee is
+// nil (defensive — should not happen on post-London mainnet).
+func gasCostUSDC(gasUnits uint64, baseFeeWei *big.Int, ethPrice decimal.Decimal) decimal.Decimal {
+	if baseFeeWei == nil || gasUnits == 0 {
 		return decimal.Zero
 	}
-	gasWei := new(big.Int).Mul(big.NewInt(int64(e.model.GasUnitsPerSwap)), baseFeeWei) //nolint:gosec // gas units are small
+	gasWei := new(big.Int).Mul(new(big.Int).SetUint64(gasUnits), baseFeeWei)
 	gasETH := decimal.NewFromBigInt(gasWei, 0).Shift(-int32(weiToETHShift))
 	return gasETH.Mul(ethPrice)
 }

@@ -98,10 +98,10 @@ func newQuoterServer(t *testing.T, sellOut, buyOut []byte, selectorCounts map[st
 }
 
 // packOutputs ABI-encodes the four return values QuoterV2 produces.
-// Only the first value (amountOut for Sell / amountIn for Buy) is
-// load-bearing for our price computation; the other three are filled
-// with zeros to satisfy the ABI shape.
-func packOutputs(t *testing.T, method string, primary *big.Int) []byte {
+// `primary` is the load-bearing value (amountOut for Sell / amountIn for
+// Buy); `gas` is the per-call gasEstimate the client extracts; the
+// remaining two slots are filled with zeros to satisfy the ABI shape.
+func packOutputs(t *testing.T, method string, primary *big.Int, gas uint64) []byte {
 	t.Helper()
 	parsed, err := abi.JSON(strings.NewReader(quoterV2ABI))
 	if err != nil {
@@ -109,9 +109,9 @@ func packOutputs(t *testing.T, method string, primary *big.Int) []byte {
 	}
 	out, err := parsed.Methods[method].Outputs.Pack(
 		primary,
-		new(big.Int), // sqrtPriceX96After
-		uint32(0),    // initializedTicksCrossed
-		new(big.Int), // gasEstimate
+		new(big.Int),                // sqrtPriceX96After
+		uint32(0),                   // initializedTicksCrossed
+		new(big.Int).SetUint64(gas), // gasEstimate
 	)
 	if err != nil {
 		t.Fatalf("pack %s outputs: %v", method, err)
@@ -121,10 +121,13 @@ func packOutputs(t *testing.T, method string, primary *big.Int) []byte {
 
 func TestEffectivePrices_HappyPath(t *testing.T) {
 	// 1 ETH Sell: pool returns amountOut = 1700 USDC → price = 1700/ETH.
-	sellOut := packOutputs(t, "quoteExactInputSingle", big.NewInt(1_700_000_000))
+	// Distinct gas values per side so the test can verify the gasEstimate
+	// flows from raw[3] into pricing.Quote.GasEstimate without confusing
+	// which call wrote which.
+	sellOut := packOutputs(t, "quoteExactInputSingle", big.NewInt(1_700_000_000), 120_000)
 	// 1 ETH Buy: pool says you'd need amountIn = 1710 USDC → price = 1710/ETH.
 	// (Buy is always at least as expensive as Sell — the 0.3% fee + slippage.)
-	buyOut := packOutputs(t, "quoteExactOutputSingle", big.NewInt(1_710_000_000))
+	buyOut := packOutputs(t, "quoteExactOutputSingle", big.NewInt(1_710_000_000), 135_000)
 
 	counts := make(map[string]int)
 	srv := newQuoterServer(t, sellOut, buyOut, counts)
@@ -156,10 +159,11 @@ func TestEffectivePrices_HappyPath(t *testing.T) {
 		q         pricing.Quote
 		wantSide  pricing.Side
 		wantPrice string
+		wantGas   uint64
 		comment   string
 	}{
-		{quotes.Sell[0], pricing.Sell, "1700", "1 ETH SELL"},
-		{quotes.Buy[0], pricing.Buy, "1710", "1 ETH BUY"},
+		{quotes.Sell[0], pricing.Sell, "1700", 120_000, "1 ETH SELL"},
+		{quotes.Buy[0], pricing.Buy, "1710", 135_000, "1 ETH BUY"},
 	}
 	for _, c := range checks {
 		if c.q.Err != nil {
@@ -174,14 +178,17 @@ func TestEffectivePrices_HappyPath(t *testing.T) {
 		if !c.q.Price.Equal(dec(c.wantPrice)) {
 			t.Errorf("%s: price got %s, want %s", c.comment, c.q.Price, c.wantPrice)
 		}
+		if c.q.GasEstimate != c.wantGas {
+			t.Errorf("%s: gas got %d, want %d", c.comment, c.q.GasEstimate, c.wantGas)
+		}
 	}
 }
 
 func TestEffectivePrices_MultipleSizes_IssuesOneCallPerSizePerSide(t *testing.T) {
 	// Constant pool: every Sell returns 1700 USDC/ETH, every Buy 1710 USDC/ETH.
 	// (Tests the dispatch + count, not the slippage math — that's the pool's job.)
-	sellOut := packOutputs(t, "quoteExactInputSingle", big.NewInt(1_700_000_000))
-	buyOut := packOutputs(t, "quoteExactOutputSingle", big.NewInt(1_710_000_000))
+	sellOut := packOutputs(t, "quoteExactInputSingle", big.NewInt(1_700_000_000), 0)
+	buyOut := packOutputs(t, "quoteExactOutputSingle", big.NewInt(1_710_000_000), 0)
 
 	counts := make(map[string]int)
 	srv := newQuoterServer(t, sellOut, buyOut, counts)

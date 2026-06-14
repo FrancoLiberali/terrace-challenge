@@ -34,13 +34,20 @@ import (
 // SellPrice is the venue's effective bid (what you receive selling Size).
 // Both are slippage-aware — the adapters do the orderbook-walk math
 // before anything reaches here.
+//
+// GasEstimate is the total on-chain gas the path would consume across
+// both legs (the sum of the per-quote gas estimates from each leg).
+// For our CEX-DEX setup exactly one leg is on-chain, so the value is
+// effectively the DEX side's gas estimate. For a DEX-only path with
+// two on-chain swaps it would be the sum.
 type CandidatePath struct {
-	Block     chain.BlockEvent
-	Size      decimal.Decimal
-	BuyVenue  string
-	SellVenue string
-	BuyPrice  decimal.Decimal
-	SellPrice decimal.Decimal
+	Block       chain.BlockEvent
+	Size        decimal.Decimal
+	BuyVenue    string
+	SellVenue   string
+	BuyPrice    decimal.Decimal
+	SellPrice   decimal.Decimal
+	GasEstimate uint64
 }
 
 // Pathfinder correlates VenueResults by block and emits one CandidatePath
@@ -145,23 +152,25 @@ func (p *Pathfinder) emitPairs(ctx context.Context, r pipeline.VenueResult, othe
 		// Requires a clean ask on r.Venue AND a clean bid on otherVenue.
 		if r.Quotes.Buy[i].Err == nil && otherQuotes.Sell[i].Err == nil {
 			p.emit(ctx, CandidatePath{
-				Block:     r.Block,
-				Size:      size,
-				BuyVenue:  r.Venue,
-				SellVenue: otherVenue,
-				BuyPrice:  r.Quotes.Buy[i].Price,
-				SellPrice: otherQuotes.Sell[i].Price,
+				Block:       r.Block,
+				Size:        size,
+				BuyVenue:    r.Venue,
+				SellVenue:   otherVenue,
+				BuyPrice:    r.Quotes.Buy[i].Price,
+				SellPrice:   otherQuotes.Sell[i].Price,
+				GasEstimate: r.Quotes.Buy[i].GasEstimate + otherQuotes.Sell[i].GasEstimate,
 			})
 		}
 		// Direction B: buy on otherVenue, sell on r.Venue.
 		if otherQuotes.Buy[i].Err == nil && r.Quotes.Sell[i].Err == nil {
 			p.emit(ctx, CandidatePath{
-				Block:     r.Block,
-				Size:      size,
-				BuyVenue:  otherVenue,
-				SellVenue: r.Venue,
-				BuyPrice:  otherQuotes.Buy[i].Price,
-				SellPrice: r.Quotes.Sell[i].Price,
+				Block:       r.Block,
+				Size:        size,
+				BuyVenue:    otherVenue,
+				SellVenue:   r.Venue,
+				BuyPrice:    otherQuotes.Buy[i].Price,
+				SellPrice:   r.Quotes.Sell[i].Price,
+				GasEstimate: otherQuotes.Buy[i].GasEstimate + r.Quotes.Sell[i].GasEstimate,
 			})
 		}
 	}

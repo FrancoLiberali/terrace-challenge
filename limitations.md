@@ -137,6 +137,16 @@ where the priority fee (a.k.a. "tip") is set per-transaction by the sender and c
 
 A production-grade cost model would estimate a competitive priority fee at the moment of submission — e.g., via `eth_feeHistory` + a percentile heuristic, or a dedicated gas oracle — and add it to the base fee before subtracting the resulting `effectiveGasPrice × gasUnits` from the spread.
 
+### Gas units: QuoterV2 simulation, not actual mined-block usage
+
+The DEX leg's gas units come from QuoterV2's per-call `gasEstimate` output — the contract's own simulation of the swap against the current pool state. This is more accurate than a hardcoded rule of thumb (it accounts for the actual number of ticks the swap would cross at this size, current liquidity, and current price), but it remains an estimate:
+
+- It simulates against the pool state **at the block being queried**. By the time a hypothetical transaction was mined, other swaps in the same block could have moved the pool, changing the number of ticks the swap actually crosses.
+- It does not include the **calling-contract overhead** (SwapRouter / multicall wrappers, signature checks, approval logic). A real on-chain swap through the production router adds roughly 5–15k gas above the raw pool interaction.
+- It does not model **cold-vs-warm storage** costs for slots that the executing transaction would touch — those depend on what other transactions ran before it in the same block.
+
+The net effect is that QuoterV2's estimate typically lands within 10–20% of actual mined-block gas usage, biased on the conservative (lower) side. This shares direction with the priority-fee omission described above — both make the cost model under-report gas — but the magnitude is much smaller than the priority-fee gap.
+
 ---
 
 ## 8. Single-pool, single-fee-tier simplification

@@ -38,10 +38,12 @@ var (
 
 	// Default cost model. Binance spot taker fee is 0.1% = 10 bps;
 	// Uniswap V3's 0.3% pool fee is already embedded in QuoterV2's
-	// output so the venue doesn't appear in the fee map.
+	// output so the venue doesn't appear in the fee map. Gas units
+	// for the DEX leg travel on each CandidatePath, sourced from
+	// QuoterV2's per-call gasEstimate output.
 	defaultCostModel = arbitrage.CostModel{
-		VenueFeeBps:     map[string]int{"binance": 10},
-		GasUnitsPerSwap: 150_000, MinNetProfitUSDC: decimal.NewFromInt(1),
+		VenueFeeBps:      map[string]int{"binance": 10},
+		MinNetProfitUSDC: decimal.NewFromInt(1),
 	}
 )
 
@@ -163,7 +165,7 @@ func printOpportunity(w io.Writer, op arbitrage.Opportunity) {
 	fmt.Fprintf(w, "Gas Cost (est):    $%s  (baseFee=%s gwei, ~%d gas)\n",
 		op.GasCostUSDC.StringFixed(4),
 		formatGwei(op.Block.BaseFee),
-		defaultCostModel.GasUnitsPerSwap,
+		op.GasEstimate,
 	)
 	fmt.Fprintf(w, "Net Profit:        $%s  (%s%%)\n",
 		op.NetProfit.StringFixed(2),

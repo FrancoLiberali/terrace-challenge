@@ -37,13 +37,19 @@ func (s Side) String() string {
 
 // Quote is the slippage-aware effective per-unit price for a single
 // (size, side) query against a venue's current state. If Err is non-nil,
-// Price is zero and the caller should treat this row as "no value at this
-// size and side."
+// Price and GasEstimate are zero and the caller should treat this row
+// as "no value at this size and side."
+//
+// GasEstimate is the on-chain gas the trade would consume on this venue.
+// On-chain venues (e.g., Uniswap V3 via QuoterV2) populate it; off-chain
+// venues (e.g., Binance REST) leave it at the zero value because the
+// trade does not touch a blockchain.
 type Quote struct {
-	Size  decimal.Decimal
-	Side  Side
-	Price decimal.Decimal // quote-token per unit base
-	Err   error
+	Size        decimal.Decimal
+	Side        Side
+	Price       decimal.Decimal // quote-token per unit base
+	GasEstimate uint64          // gas units to execute on the venue's chain; 0 for off-chain venues
+	Err         error
 }
 
 // Quotes holds the per-side results an adapter returns for one snapshot.

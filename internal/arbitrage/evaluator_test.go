@@ -13,9 +13,20 @@ import (
 
 func dec(s string) decimal.Decimal { return decimal.RequireFromString(s) }
 
-// mkPath builds a synthetic candidate path. baseFee is in gwei for
-// readability; we convert to wei here.
+// defaultGasUnits is the per-swap gas estimate the tests use unless they
+// override it explicitly. Matches the historic rule-of-thumb value so
+// the expected fee/gas/net numbers in older tests remain comparable.
+const defaultGasUnits uint64 = 150_000
+
+// mkPath builds a synthetic candidate path with a default gas estimate.
+// baseFee is in gwei for readability; we convert to wei here.
 func mkPath(buyVenue, sellVenue string, size, buyPrice, sellPrice string, baseFeeGwei int64) pathfinder.CandidatePath {
+	return mkPathGas(buyVenue, sellVenue, size, buyPrice, sellPrice, baseFeeGwei, defaultGasUnits)
+}
+
+// mkPathGas is mkPath with the gas estimate overridable. Used by tests
+// that vary gas explicitly.
+func mkPathGas(buyVenue, sellVenue string, size, buyPrice, sellPrice string, baseFeeGwei int64, gasUnits uint64) pathfinder.CandidatePath {
 	const gweiInWei = 1_000_000_000
 	baseFeeWei := new(big.Int).Mul(big.NewInt(baseFeeGwei), big.NewInt(gweiInWei))
 	return pathfinder.CandidatePath{
@@ -24,20 +35,21 @@ func mkPath(buyVenue, sellVenue string, size, buyPrice, sellPrice string, baseFe
 			Timestamp: time.Unix(1_700_000_000, 0).UTC(),
 			BaseFee:   baseFeeWei,
 		},
-		Size:      dec(size),
-		BuyVenue:  buyVenue,
-		SellVenue: sellVenue,
-		BuyPrice:  dec(buyPrice),
-		SellPrice: dec(sellPrice),
+		Size:        dec(size),
+		BuyVenue:    buyVenue,
+		SellVenue:   sellVenue,
+		BuyPrice:    dec(buyPrice),
+		SellPrice:   dec(sellPrice),
+		GasEstimate: gasUnits,
 	}
 }
 
-// standardModel: Binance at 0.1%, Uniswap fee-free at this layer, 150k
-// gas per swap, $1 minimum profit.
+// standardModel: Binance at 0.1%, Uniswap fee-free at this layer,
+// $1 minimum profit. (Gas units now travel on each CandidatePath rather
+// than living on the model.)
 func standardModel() CostModel {
 	return CostModel{
 		VenueFeeBps:      map[string]int{"binance": 10},
-		GasUnitsPerSwap:  150_000,
 		MinNetProfitUSDC: decimal.NewFromInt(1),
 	}
 }

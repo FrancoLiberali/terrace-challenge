@@ -123,8 +123,11 @@ func (c *Client) quoteBuy(ctx context.Context, pool Pool, size decimal.Decimal) 
 // quote shares the call → unpack → price-math path between Buy and Sell.
 // QuoterV2's two functions return the load-bearing value (amountOut for
 // exactInput, amountIn for exactOutput) in the same first output slot, so
-// both directions reduce to "first big.Int divided by size, denominated in
-// quote decimals."
+// both directions reduce to "first big.Int divided by size, denominated
+// in quote decimals." The 4th slot carries a per-call gas estimate — the
+// number of gas units QuoterV2 would charge if this exact swap were
+// executed against the current pool state — which we surface verbatim
+// on the Quote.
 func (c *Client) quote(ctx context.Context, side pricing.Side, size decimal.Decimal, quoteDecimals uint8, method string, params any) pricing.Quote {
 	raw, err := c.call(ctx, method, params)
 	if err != nil {
@@ -134,8 +137,25 @@ func (c *Client) quote(ctx context.Context, side pricing.Side, size decimal.Deci
 	if !ok {
 		return pricing.Quote{Size: size, Side: side, Err: fmt.Errorf("unexpected primary output type %T", raw[0])}
 	}
+	// raw[3] is gasEstimate (uint256 in solidity; *big.Int in Go).
+	// uint256 → uint64 conversion is safe in practice: an Ethereum
+	// transaction's gas limit is bounded by the block gas limit
+	// (~30M units today), so any single-swap estimate fits in uint64
+	// with ~12 orders of magnitude to spare.
+	gasBig, ok := raw[3].(*big.Int)
+	if !ok {
+		return pricing.Quote{Size: size, Side: side, Err: fmt.Errorf("unexpected gasEstimate output type %T", raw[3])}
+	}
+	if !gasBig.IsUint64() {
+		return pricing.Quote{Size: size, Side: side, Err: fmt.Errorf("gasEstimate overflows uint64: %s", gasBig)}
+	}
 	price := fromRawAmount(primary, quoteDecimals).Div(size)
-	return pricing.Quote{Size: size, Side: side, Price: price}
+	return pricing.Quote{
+		Size:        size,
+		Side:        side,
+		Price:       price,
+		GasEstimate: gasBig.Uint64(),
+	}
 }
 
 // call packs the given method's params, fires an eth_call to QuoterV2 at
