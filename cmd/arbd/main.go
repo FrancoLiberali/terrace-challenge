@@ -64,15 +64,6 @@ func run() error {
 		return errors.New("ETH_RPC_WS_URL is not set in .env (see README.md)")
 	}
 
-	model := defaultCostModel
-	if v := os.Getenv("ARBD_MIN_PROFIT_USDC"); v != "" {
-		t, err := decimal.NewFromString(v)
-		if err != nil {
-			return fmt.Errorf("ARBD_MIN_PROFIT_USDC %q: %w", v, err)
-		}
-		model.MinNetProfitUSDC = t
-	}
-
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
@@ -96,7 +87,7 @@ func run() error {
 		"uniswap": uniswapSn,
 	})
 	pf := pathfinder.NewPathfinder()
-	ev := arbitrage.NewEvaluator(model)
+	ev := arbitrage.NewEvaluator(defaultCostModel)
 
 	subErr := make(chan error, 1)
 	go func() { subErr <- sub.Run(ctx) }()
@@ -108,7 +99,7 @@ func run() error {
 	fmt.Fprintf(os.Stdout,
 		"arbd: detecting CEX↔DEX arbitrage on ETH-USDC (binance + uniswap v3 0.3%%)\n"+
 			"      threshold: net profit > $%s USDC — Ctrl+C to stop\n\n",
-		model.MinNetProfitUSDC.String(),
+		defaultCostModel.MinNetProfitUSDC.String(),
 	)
 
 	consume(os.Stdout, pf.Candidates(), ev)
