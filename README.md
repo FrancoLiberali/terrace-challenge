@@ -1,5 +1,7 @@
 # terrace-challenge
 
+[![CI](https://github.com/FrancoLiberali/terrace-challenge/actions/workflows/ci.yml/badge.svg)](https://github.com/FrancoLiberali/terrace-challenge/actions/workflows/ci.yml)
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=FrancoLiberali_terrace-challenge&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=FrancoLiberali_terrace-challenge)
 [![Coverage](https://sonarcloud.io/api/project_badges/measure?project=FrancoLiberali_terrace-challenge&metric=coverage)](https://sonarcloud.io/summary/new_code?id=FrancoLiberali_terrace-challenge)
 
 Real-time CEX–DEX arbitrage detection between Binance and Uniswap V3 for the ETH-USDC pair, sampled on every Ethereum block. Built in Go as part of the Terrace Senior Software Engineer coding challenge.
