@@ -19,6 +19,10 @@ The order below is intentional — it mirrors how I approached the challenge, an
 5. [**plan.md**](./plan.md) — **how the work was sequenced.** The challenge is divided into seven phases, each independently runnable and verifiable end-to-end against real venues. Integration-first (probes against real APIs before any composition), types-on-demand (abstractions emerge from the third concrete usage, not the first), value delivered each step. Reflects the agile-style "make it work small, then make it grow" approach.
 6. [**implementation.md**](./implementation.md) — **Go-level structure, last.** Package layout, interface seams, and the per-host resilience composition pattern. Read last because by this point every Go-specific choice should be a mechanical translation of the architecture and plan above — interesting if you want to see *how* it lands in code, but not where the design lives.
 
+Alongside the design narrative above, one sidebar document describes the *engineering practices* applied to build it — testing discipline, CI, code review, quality gates, security, reproducibility:
+
+- [**engineering.md**](./engineering.md) — **how it was built.** Not part of the brief→implementation arc, but the bedrock everything above stands on. Useful as a reference for the level of discipline expected here, and as a record of what I'd consider "the work" beyond just the running binary.
+
 ## Quickstart
 
 Five minutes from clone to first block evaluated. Pick the path that matches what's installed locally.
