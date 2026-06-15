@@ -3,6 +3,7 @@ module github.com/FrancoLiberali/terrace-challenge
 go 1.25.5
 
 require (
+	github.com/cenkalti/backoff/v5 v5.0.3
 	github.com/ethereum/go-ethereum v1.17.3
 	github.com/hashicorp/go-retryablehttp v0.7.8
 	github.com/joho/godotenv v1.5.1

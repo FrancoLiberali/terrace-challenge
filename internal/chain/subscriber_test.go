@@ -97,9 +97,10 @@ func (f *fakeDialer) dials() int {
 // reconnect delay so the dial-retry path runs instantly.
 func newTestSubscriber(d *fakeDialer) *Subscriber {
 	return &Subscriber{
-		dial:           d,
-		out:            make(chan BlockEvent, 8),
-		reconnectDelay: 1 * time.Millisecond,
+		dial:                  d,
+		out:                   make(chan BlockEvent, 8),
+		reconnectInitialDelay: 1 * time.Millisecond,
+		reconnectMaxDelay:     10 * time.Millisecond,
 	}
 }
 
