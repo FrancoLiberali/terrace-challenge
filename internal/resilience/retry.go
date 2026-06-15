@@ -38,20 +38,21 @@ const (
 // DefaultRetryConfig returns a config that retries up to 4 times with
 // exponential backoff starting at 500ms and capped at 10s. The
 // underlying libraries add jitter automatically.
-func DefaultRetryConfig() RetryConfig {
-	return RetryConfig{
+func DefaultRetryConfig() *RetryConfig {
+	return &RetryConfig{
 		MaxRetries:  defaultMaxRetries,
 		InitialWait: defaultInitialWait,
 		MaxWait:     defaultMaxWait,
 	}
 }
 
-// HTTPClientConfig parameterises NewHTTPClient. Limiter and Breaker
-// are optional — pass nil to skip that layer. RequestTimeout applies
-// to each individual attempt, not the total retry budget; a single
-// hung connection cannot consume the entire window.
+// HTTPClientConfig parameterises NewHTTPClient. Retry, Limiter and
+// Breaker are each optional — pass nil to skip that layer.
+// RequestTimeout applies to each individual attempt, not the total
+// retry budget; a single hung connection cannot consume the entire
+// window.
 type HTTPClientConfig struct {
-	Retry          RetryConfig
+	Retry          *RetryConfig
 	Limiter        *RateLimiter
 	Breaker        *CircuitBreaker
 	RequestTimeout time.Duration
@@ -74,6 +75,9 @@ func NewHTTPClient(cfg HTTPClientConfig) *http.Client {
 	}
 	if cfg.Breaker != nil {
 		transport = &circuitBreakerTransport{inner: transport, breaker: cfg.Breaker}
+	}
+	if cfg.Retry == nil {
+		return &http.Client{Transport: transport, Timeout: cfg.RequestTimeout}
 	}
 
 	c := retryablehttp.NewClient()

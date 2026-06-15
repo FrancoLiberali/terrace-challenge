@@ -194,7 +194,7 @@ func TestClient_NewClientWithHTTP_RetriesTransient5xx(t *testing.T) {
 	defer srv.Close()
 
 	httpClient := resilience.NewHTTPClient(resilience.HTTPClientConfig{
-		Retry: resilience.RetryConfig{
+		Retry: &resilience.RetryConfig{
 			MaxRetries:  3,
 			InitialWait: 5 * time.Millisecond,
 			MaxWait:     20 * time.Millisecond,

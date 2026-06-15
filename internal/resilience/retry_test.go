@@ -14,8 +14,8 @@ import (
 
 // fastRetryConfig: exponential and jittered (real backoff math)
 // but sub-second so the suite runs quickly.
-func fastRetryConfig() RetryConfig {
-	return RetryConfig{
+func fastRetryConfig() *RetryConfig {
+	return &RetryConfig{
 		MaxRetries:  3,
 		InitialWait: 5 * time.Millisecond,
 		MaxWait:     50 * time.Millisecond,
@@ -117,9 +117,8 @@ func TestNewHTTPClient_OpenBreakerShortCircuitsWithoutRetry(t *testing.T) {
 		Cooldown:         time.Hour, // stays open for the duration of the test
 	})
 	c := NewHTTPClient(HTTPClientConfig{
-		// Retry off so each Get is one attempt — easier to count toward
-		// the breaker's trip threshold deterministically.
-		Retry:          RetryConfig{},
+		// Retry nil — each Get is one attempt, deterministic toward
+		// the breaker's trip threshold.
 		Breaker:        breaker,
 		RequestTimeout: 5 * time.Second,
 	})
