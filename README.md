@@ -8,6 +8,17 @@ Real-time CEX–DEX arbitrage detection between Binance and Uniswap V3 for the E
 
 The bot subscribes to Ethereum's `newHeads` stream, fetches a fee-adjusted Binance orderbook snapshot and a `QuoterV2` simulation from Uniswap V3 in parallel for each block, pairs the results, applies a cost model (trading fees + gas), and emits a structured alert whenever the net profit clears a configurable threshold.
 
+## Documentation
+
+The order below is intentional — it mirrors how I approached the challenge, and reading them in sequence is the fastest way to see not just *what* I built but *why* every decision is the way it is. The exercise isn't only "produce a working detector"; it's also a chance to show how I work, and that starts with how the problem was framed, bounded, and broken down before any code was written.
+
+1. [**CHALLENGE.md**](./CHALLENGE.md) — **the brief I was given**, transcribed from the provided PDF. Everything that follows is my response to it; reading the brief first makes the choices in the next documents legible.
+2. [**business.md**](./business.md) — **the why and the context.** Before writing a line of code I wanted to be confident I understood what the system is *for*: what an arbitrage opportunity actually is, why CEX and DEX prices diverge in the first place, and why the Ethereum block is the natural clock for the design. Implementation choices that don't trace back to a business reason are guesses; this document is the grounding everything else builds on.
+3. [**limitations.md**](./limitations.md) — **what we're deliberately not modelling, and why.** The limitations fall out of the business analysis above: working through what really happens on a CEX–DEX arb makes the simplifications we're accepting visible. Writing them down explicitly turns them into a backlog — the gap between the detection challenge we're solving and a production trading system, enumerated rather than hidden. Useful as a "what changes when we move to prod" punch list.
+4. [**architecture.md**](./architecture.md) — **the design that satisfies the business and respects the limitations.** Components, data flow, design decisions with their alternatives-considered, and an explicit "what a production-scale version would add" section that ties back to the same backlog from `limitations.md`.
+5. [**plan.md**](./plan.md) — **how the work was sequenced.** The challenge is divided into seven phases, each independently runnable and verifiable end-to-end against real venues. Integration-first (probes against real APIs before any composition), types-on-demand (abstractions emerge from the third concrete usage, not the first), value delivered each step. Reflects the agile-style "make it work small, then make it grow" approach.
+6. [**implementation.md**](./implementation.md) — **Go-level structure, last.** Package layout, interface seams, and the per-host resilience composition pattern. Read last because by this point every Go-specific choice should be a mechanical translation of the architecture and plan above — interesting if you want to see *how* it lands in code, but not where the design lives.
+
 ## Quickstart
 
 Five minutes from clone to first block evaluated. Pick the path that matches what's installed locally.
@@ -97,11 +108,3 @@ make probe-chain     # diagnostic: newHeads stream
 make tidy            # go mod tidy
 ```
 
-## Documentation
-
-- [**CHALLENGE.md**](./CHALLENGE.md) — the original challenge specification (converted from the provided PDF) describing requirements, deliverables, and evaluation criteria.
-- [**business.md**](./business.md) — business context: what the system detects, why CEX and DEX prices diverge, and why the Ethereum block is the natural clock for the design.
-- [**architecture.md**](./architecture.md) — conceptual architecture: components, data flow, design decisions, trade-offs, and what a production-scale version would look like.
-- [**implementation.md**](./implementation.md) — Go-level structure: package layout, interface seams in code, and the per-host resilience composition pattern.
-- [**plan.md**](./plan.md) — step-by-step implementation plan: integration-first, types-on-demand, with verification per step.
-- [**limitations.md**](./limitations.md) — explicit list of known limitations, risks, and missed opportunities of the simplified detection-only design, plus what a production trading extension would require.
