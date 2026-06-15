@@ -189,7 +189,7 @@ The `Symbol.TakerFeeBps` field is the seam for a more accurate source. A product
 
 ## 9. Single-pool, single-fee-tier simplification
 
-The detector queries one Uniswap V3 pool per run. The fee tier is operator-selectable via the `UNISWAP_POOL_FEE` env var — `500` (0.05%), `3000` (0.3%, the canonical ETH-USDC pool at `0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640`), or `10000` (1%) — but the bot still observes only one tier at a time. In reality ETH-USDC has multiple Uniswap V3 pools at different fee tiers, each with its own liquidity profile and price. A real router would query all of them per block and pick the best effective price per trade size, and a real arbitrageur might split a large order across several pools at once. The detector adopts the challenge's implied scope and explicitly trades off completeness for simplicity.
+The detector queries one Uniswap V3 pool per run. The fee tier is operator-selectable via the `UNISWAP_POOL_FEE` env var — `500` (0.05%, the most-liquid ETH-USDC pool at `0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640`), `3000` (0.3% at `0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8`), or `10000` (1% at `0x7BeA39867e4169DBe237d55C8242a8f2fcDcc387`) — but the bot still observes only one tier at a time. In reality ETH-USDC has multiple Uniswap V3 pools at different fee tiers, each with its own liquidity profile and price. A real router would query all of them per block and pick the best effective price per trade size, and a real arbitrageur might split a large order across several pools at once. The detector adopts the challenge's implied scope and explicitly trades off completeness for simplicity.
 
 ---
 

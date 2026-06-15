@@ -131,10 +131,18 @@ func run() error {
 	}
 	slog.SetDefault(slog.New(newSlogHandler(envCfg.pretty, &slog.HandlerOptions{Level: envCfg.level})))
 
+	uniswapPoolAddr := uniswapv3.PoolAddress(
+		uniswapv3.UniswapV3FactoryMainnet,
+		uniswapv3.WETH,
+		uniswapv3.USDC,
+		envCfg.uniswapPoolFee,
+	)
 	sink := &alert.TextSink{
-		Logger: slog.New(newSlogHandler(envCfg.pretty, nil)),
-		Out:    os.Stdout,
-		Pretty: envCfg.pretty,
+		Logger:             slog.New(newSlogHandler(envCfg.pretty, nil)),
+		Out:                os.Stdout,
+		Pretty:             envCfg.pretty,
+		UniswapVenue:       venueUniswap,
+		UniswapPoolAddress: uniswapPoolAddr,
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

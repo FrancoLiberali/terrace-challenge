@@ -11,6 +11,7 @@ import (
 	"math/big"
 	"strings"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/shopspring/decimal"
 
 	"github.com/FrancoLiberali/terrace-challenge/internal/arbitrage"
@@ -33,16 +34,29 @@ const (
 	// 1 gwei == 1e9 wei; we render with 3-decimal precision.
 	weiPerGwei         = 1_000_000_000
 	gweiMilliPrecision = 1000
+
+	// Step numbers in the multi-line execution-steps section. Fixed
+	// 3-step flow: buy on venue A, transfer ETH, sell on venue B.
+	stepBuy      = 1
+	stepTransfer = 2
+	stepSell     = 3
 )
 
 // TextSink is the default Sink. Every Emit fires a structured slog
 // event (one record per opportunity, all fields keyed for log
 // aggregators) and, when Pretty is true, also writes the multi-line
 // human-readable block from CHALLENGE.md to Out.
+//
+// UniswapVenue is the venue label that should be formatted as a DEX
+// swap in the execution steps (with pool address + expected output);
+// UniswapPoolAddress is the resolved pool address for that venue.
+// When UniswapVenue is empty, the DEX-specific formatting is skipped.
 type TextSink struct {
-	Logger *slog.Logger
-	Out    io.Writer
-	Pretty bool
+	Logger             *slog.Logger
+	Out                io.Writer
+	Pretty             bool
+	UniswapVenue       string
+	UniswapPoolAddress common.Address
 }
 
 // Emit writes the opportunity to both channels. The slog event is
@@ -65,6 +79,7 @@ func (s *TextSink) Emit(op arbitrage.Opportunity) {
 		"net_profit_usdc", op.NetProfit.StringFixed(dpUSDC),
 		"net_profit_pct", op.NetProfitPct.StringFixed(dpPrice),
 		"capital_usdc", op.CapitalUSDC.StringFixed(dpUSDC),
+		"uniswap_pool", s.UniswapPoolAddress.Hex(),
 	)
 	if s.Pretty {
 		s.printPretty(op)
@@ -101,15 +116,43 @@ func (s *TextSink) printPretty(op arbitrage.Opportunity) {
 	fmt.Fprintf(w, "Capital Required:  $%s USDC\n", op.CapitalUSDC.StringFixed(dpUSDC))
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Execution Steps:")
-	fmt.Fprintf(w, "  1. Buy  %s ETH on %s at ~$%s/ETH (capital: ~$%s)\n",
-		op.Size.String(), op.BuyVenue, op.BuyPrice.StringFixed(dpUSDC), op.CapitalUSDC.StringFixed(dpUSDC))
-	fmt.Fprintf(w, "  2. Move ETH to the venue that sells (operationally — bridging, transfer time, etc.)\n")
-	fmt.Fprintf(w, "  3. Sell %s ETH on %s at ~$%s/ETH (expected: ~$%s)\n",
-		op.Size.String(), op.SellVenue, op.SellPrice.StringFixed(dpUSDC),
-		op.SellPrice.Mul(op.Size).StringFixed(dpUSDC),
-	)
+	s.writeBuyStep(w, stepBuy, op)
+	fmt.Fprintf(w, "  %d. Transfer ETH from buy venue to sell venue (operationally — bridging, transfer time, etc.)\n", stepTransfer)
+	s.writeSellStep(w, stepSell, op)
 	fmt.Fprintln(w, "Risk factors: see limitations.md (intra-block drift, MEV on the DEX leg, gas-price spikes)")
 	fmt.Fprintln(w, strings.Repeat("─", sepWidth))
+}
+
+// writeBuyStep emits the buy leg. If the buy venue matches
+// s.UniswapVenue the step is formatted as a Uniswap V3 swap with the
+// pool address and required input as sub-bullets (matching the alert
+// shape in CHALLENGE.md); otherwise as a CEX buy.
+func (s *TextSink) writeBuyStep(w io.Writer, n int, op arbitrage.Opportunity) {
+	if s.isUniswap(op.BuyVenue) {
+		fmt.Fprintf(w, "  %d. Execute Uniswap V3 swap: USDC → %s ETH\n", n, op.Size.String())
+		fmt.Fprintf(w, "     - Pool: %s\n", s.UniswapPoolAddress.Hex())
+		fmt.Fprintf(w, "     - Required input: ~$%s USDC\n", op.CapitalUSDC.StringFixed(dpUSDC))
+		return
+	}
+	fmt.Fprintf(w, "  %d. Buy %s ETH on %s at ~$%s/ETH\n", n, op.Size.String(), op.BuyVenue, op.BuyPrice.StringFixed(dpUSDC))
+	fmt.Fprintf(w, "     - Required capital: ~$%s USDC\n", op.CapitalUSDC.StringFixed(dpUSDC))
+}
+
+// writeSellStep emits the sell leg, symmetric to writeBuyStep.
+func (s *TextSink) writeSellStep(w io.Writer, n int, op arbitrage.Opportunity) {
+	sellOutput := op.SellPrice.Mul(op.Size)
+	if s.isUniswap(op.SellVenue) {
+		fmt.Fprintf(w, "  %d. Execute Uniswap V3 swap: %s ETH → USDC\n", n, op.Size.String())
+		fmt.Fprintf(w, "     - Pool: %s\n", s.UniswapPoolAddress.Hex())
+		fmt.Fprintf(w, "     - Expected output: ~$%s USDC\n", sellOutput.StringFixed(dpUSDC))
+		return
+	}
+	fmt.Fprintf(w, "  %d. Sell %s ETH on %s at ~$%s/ETH\n", n, op.Size.String(), op.SellVenue, op.SellPrice.StringFixed(dpUSDC))
+	fmt.Fprintf(w, "     - Expected proceeds: ~$%s USDC\n", sellOutput.StringFixed(dpUSDC))
+}
+
+func (s *TextSink) isUniswap(venue string) bool {
+	return s.UniswapVenue != "" && venue == s.UniswapVenue
 }
 
 // percentScale converts a ratio (0..1) into a percentage (0..100) for

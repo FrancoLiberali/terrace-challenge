@@ -9,12 +9,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/shopspring/decimal"
 
 	"github.com/FrancoLiberali/terrace-challenge/internal/arbitrage"
 	"github.com/FrancoLiberali/terrace-challenge/internal/chain"
 	"github.com/FrancoLiberali/terrace-challenge/internal/pathfinder"
 )
+
+// testPoolAddress is the canonical ETH-USDC 0.3% pool address. Used by
+// pretty-output tests to verify the DEX leg's "Pool:" sub-bullet
+// matches what arbd would actually compute at startup.
+var testPoolAddress = common.HexToAddress("0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8")
 
 // sampleOpportunity is a deterministic opportunity used as fixture
 // across tests. Values are picked so format assertions can grep for
@@ -71,9 +77,11 @@ func TestTextSink_EmitsStructuredEvent(t *testing.T) {
 func TestTextSink_PrettyOutputContainsExpectedSections(t *testing.T) {
 	var logBuf, outBuf bytes.Buffer
 	sink := &TextSink{
-		Logger: slog.New(slog.NewTextHandler(&logBuf, nil)),
-		Out:    &outBuf,
-		Pretty: true,
+		Logger:             slog.New(slog.NewTextHandler(&logBuf, nil)),
+		Out:                &outBuf,
+		Pretty:             true,
+		UniswapVenue:       "uniswap",
+		UniswapPoolAddress: testPoolAddress,
 	}
 	sink.Emit(sampleOpportunity())
 
@@ -87,6 +95,10 @@ func TestTextSink_PrettyOutputContainsExpectedSections(t *testing.T) {
 		"Capital Required:  $16800.00 USDC",
 		"Execution Steps:",
 		"baseFee=5.000 gwei",
+		// Sell leg is on Uniswap in the fixture; spec format applies.
+		"Execute Uniswap V3 swap: 10 ETH → USDC",
+		"Pool: " + testPoolAddress.Hex(),
+		"Expected output: ~$16900.00 USDC",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("pretty output missing %q\nfull output:\n%s", want, got)
