@@ -247,7 +247,17 @@ func consume(candidates <-chan pathfinder.CandidatePath, ev *arbitrage.Evaluator
 	for path := range candidates {
 		total++
 		op := ev.Evaluate(path)
-		if !ev.IsProfitable(op) {
+		isProfitable := ev.IsProfitable(op)
+		slog.Debug("evaluated candidate",
+			"block", op.Block.Number,
+			"direction", op.BuyVenue+"→"+op.SellVenue,
+			"size_eth", op.Size.String(),
+			"buy_price_usdc", op.BuyPrice.String(),
+			"sell_price_usdc", op.SellPrice.String(),
+			"net_profit_usdc", op.NetProfit.String(),
+			"profitable", isProfitable,
+		)
+		if !isProfitable {
 			continue
 		}
 		profitable++
