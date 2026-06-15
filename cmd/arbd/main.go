@@ -230,7 +230,7 @@ func newSlogHandler(pretty bool, opts *slog.HandlerOptions) slog.Handler {
 	return slog.NewJSONHandler(os.Stderr, opts)
 }
 
-func consume(candidates <-chan pathfinder.CandidatePath, ev *arbitrage.Evaluator, sink alert.Sink) {
+func consume(candidates <-chan pathfinder.CandidatePath, ev *arbitrage.Evaluator, sink *alert.TextSink) {
 	total, profitable := 0, 0
 	for path := range candidates {
 		total++

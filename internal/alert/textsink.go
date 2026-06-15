@@ -1,3 +1,7 @@
+// Package alert is where the bot emits arbitrage opportunities — the
+// product of the detection pipeline. TextSink combines a structured
+// slog event (always emitted) with an optional human-readable block
+// gated by PRETTY_ALERTS for local-dev terminals.
 package alert
 
 import (
