@@ -10,7 +10,6 @@ For the conceptual architecture (what components exist, how they relate, the des
 
 - [Package layout](#package-layout)
 - [Conventions](#conventions)
-- [Interface seams in code](#interface-seams-in-code)
 - [Streaming pipeline and concurrency model](#streaming-pipeline-and-concurrency-model)
 - [Resilience composition pattern](#resilience-composition-pattern)
 - [Defensive correctness at boundaries](#defensive-correctness-at-boundaries)
@@ -72,22 +71,6 @@ terrace-challenge/
 
 ---
 
-## Interface seams in code
-
-The implementation exposes one explicit unification seam plus two configuration seams. Everything else stayed concrete — abstracting it would add noise without enabling real flexibility.
-
-| Seam | Package | Purpose |
-|---|---|---|
-| `Snapshotter` | `internal/pipeline` | One method `Snapshot(ctx, BlockEvent) (Quotes, error)`. The single shape every venue produces, regardless of whether it's CEX, DEX, or future market structure. Downstream code (Dispatcher, Pathfinder, Evaluator) does not care which venue any given price came from. |
-| `*http.Client` (via `resilience.NewHTTPClient`) | `internal/resilience` | The composed resilience stack per host. The `*http.Client` shape is stdlib so adapter code stays unaware of which libraries back the retry / breaker / rate-limit layers. |
-| `BreakerConfig.OnStateChange` | `internal/resilience` | Callback fired on every breaker state transition. `cmd/arbd` hooks it to a `slog.Warn` so operator visibility is wired without the breaker package depending on slog. |
-
-`BinanceSnapshotter` and `UniswapSnapshotter` are concrete implementations of `Snapshotter` that bind their venue-specific configuration at construction time. The Dispatcher holds a `map[string]Snapshotter` — adding a venue is a `pipeline.NewXxxSnapshotter` + a map entry in `main.go`.
-
-Internal pipeline components (Dispatcher, Pathfinder, Profitability Evaluator) are intentionally concrete structs and pure functions, not interfaces — abstracting them would add noise without enabling any real flexibility.
-
----
-
 ## Streaming pipeline and concurrency model
 
 The pipeline is four stages connected by channels — each stage runs in its own goroutine, owns its output channel, and closes it on `defer` when its `Run` returns:
@@ -95,6 +78,8 @@ The pipeline is four stages connected by channels — each stage runs in its own
 ```
 Subscriber  ──BlockEvent──▶  Dispatcher  ──VenueResult──▶  Pathfinder  ──CandidatePath──▶  Evaluator
 ```
+
+The Dispatcher consumes anything that implements `Snapshotter` (one method: `Snapshot(ctx, BlockEvent) (Quotes, error)`) — the only polymorphic seam in the pipeline. `BinanceSnapshotter` and `UniswapSnapshotter` are concrete implementations bound to their venue config at construction time, registered with the Dispatcher via a `map[string]Snapshotter` in `main.go`; adding a venue is one new implementation plus one map entry. Every other stage (Dispatcher, Pathfinder, Evaluator) is a concrete struct or pure function — abstractable later if real flexibility shows up.
 
 Downstream `for x := range stage.Out()` loops terminate naturally when the upstream `Run` returns — no separate done-channel, no signalling protocol on top of the channel send. The Subscriber close-on-defer guarantees this even on the ctx-cancel exit path.
 
@@ -267,7 +252,7 @@ All four items live in `internal/resilience/`, composed into a single `*http.Cli
 | Sub-requirement | Status |
 |---|---|
 | Clear separation of concerns | The package layout mirrors the responsibility chart: `internal/chain/` (block subscription), `internal/cex/binance/` + `internal/dex/uniswapv3/` (raw adapters), `internal/pipeline/` (per-block fan-out + Snapshotter interface), `internal/pathfinder/` (correlation), `internal/arbitrage/` (cost model — pure), `internal/alert/` (output formatting), `internal/resilience/` (cross-cutting). `cmd/arbd/` is the only package that knows how the pieces fit together |
-| Well-defined interfaces | One unification seam (`Snapshotter`) plus two configuration seams (`*http.Client` via `resilience.NewHTTPClient`, `BreakerConfig.OnStateChange`). Other components stay concrete — abstracting them would add noise without enabling real flexibility. See [Interface seams in code](#interface-seams-in-code) above |
+| Well-defined interfaces | One unification seam (`Snapshotter`) plus two configuration seams (`*http.Client` via `resilience.NewHTTPClient`, `BreakerConfig.OnStateChange`). Other components stay concrete — abstracting them would add noise without enabling real flexibility |
 | Error types and handling | Per-row `pricing.Quote.Err` (depth exhaustion at a specific size); per-venue `pipeline.VenueResult.Err` (HTTP timeout, RPC error); `backoff.Permanent` to opt out of retry on deterministic outcomes (execution reverted, etc.). Errors flow alongside successes at every layer — partial results survive |
 | Testability | 87.5% statement coverage on `internal/` (cmd/ excluded as wiring; exercised by live smoke tests per phase); race detector in CI; the decoupled package layout means every component is unit-testable in isolation. The pure packages (`pricing/`, `pathfinder/`, `arbitrage/`) are particularly inexpensive to test thoroughly |
 
