@@ -10,12 +10,10 @@ For the conceptual architecture (what components exist, how they relate, the des
 
 - [Package layout](#package-layout)
 - [Conventions](#conventions)
-- [Interface seams in code](#interface-seams-in-code)
 - [Streaming pipeline and concurrency model](#streaming-pipeline-and-concurrency-model)
 - [Resilience composition pattern](#resilience-composition-pattern)
 - [Defensive correctness at boundaries](#defensive-correctness-at-boundaries)
 - [Encapsulation: venue specifics stay in the adapter](#encapsulation-venue-specifics-stay-in-the-adapter)
-- [Emergent design in practice](#emergent-design-in-practice)
 - [Senior Engineer Requirements: what we addressed and what we deferred](#senior-engineer-requirements-what-we-addressed-and-what-we-deferred)
 - [Numeric types for financial math](#numeric-types-for-financial-math)
 
@@ -49,18 +47,16 @@ terrace-challenge/
 │   │   └── uniswap.go                # Uniswap Snapshotter implementation
 │   ├── pathfinder/pathfinder.go      # candidate-path enumeration (pure)
 │   ├── arbitrage/evaluator.go        # cost model → Opportunity (pure)
+│   ├── alert/textsink.go             # structured + optional pretty output
+│   ├── config/config.go              # YAML loader (config.yaml)
 │   └── resilience/
 │       ├── ratelimit.go              # token bucket (wraps x/time/rate)
 │       ├── breaker.go                # circuit breaker (wraps gobreaker)
 │       └── retry.go                  # NewHTTPClient + transport wrappers
+├── config.yaml
 ├── go.mod
 └── (docs at repo root)
 ```
-
-Config loading and a YAML format are deferred to Step 7. Alert output
-lives directly in `cmd/arbd/main.go` (`emitOpportunity` →
-structured `slog.Info` + optional pretty block) — an injectable
-`OpportunitySink` interface would be premature for a single output.
 
 ---
 
@@ -74,22 +70,6 @@ structured `slog.Info` + optional pretty block) — an injectable
 
 ---
 
-## Interface seams in code
-
-The implementation exposes one explicit unification seam plus two configuration seams. Everything else stayed concrete — abstracting it would add noise without enabling real flexibility.
-
-| Seam | Package | Purpose |
-|---|---|---|
-| `Snapshotter` | `internal/pipeline` | One method `Snapshot(ctx, BlockEvent) (Quotes, error)`. The single shape every venue produces, regardless of whether it's CEX, DEX, or future market structure. Downstream code (Dispatcher, Pathfinder, Evaluator) does not care which venue any given price came from. |
-| `*http.Client` (via `resilience.NewHTTPClient`) | `internal/resilience` | The composed resilience stack per host. The `*http.Client` shape is stdlib so adapter code stays unaware of which libraries back the retry / breaker / rate-limit layers. |
-| `BreakerConfig.OnStateChange` | `internal/resilience` | Callback fired on every breaker state transition. `cmd/arbd` hooks it to a `slog.Warn` so operator visibility is wired without the breaker package depending on slog. |
-
-`BinanceSnapshotter` and `UniswapSnapshotter` are concrete implementations of `Snapshotter` that bind their venue-specific configuration at construction time. The Dispatcher holds a `map[string]Snapshotter` — adding a venue is a `pipeline.NewXxxSnapshotter` + a map entry in `main.go`.
-
-Internal pipeline components (Dispatcher, Pathfinder, Profitability Evaluator) are intentionally concrete structs and pure functions, not interfaces — abstracting them would add noise without enabling any real flexibility.
-
----
-
 ## Streaming pipeline and concurrency model
 
 The pipeline is four stages connected by channels — each stage runs in its own goroutine, owns its output channel, and closes it on `defer` when its `Run` returns:
@@ -97,6 +77,8 @@ The pipeline is four stages connected by channels — each stage runs in its own
 ```
 Subscriber  ──BlockEvent──▶  Dispatcher  ──VenueResult──▶  Pathfinder  ──CandidatePath──▶  Evaluator
 ```
+
+The Dispatcher consumes anything that implements `Snapshotter` (one method: `Snapshot(ctx, BlockEvent) (Quotes, error)`) — the only polymorphic seam in the pipeline. `BinanceSnapshotter` and `UniswapSnapshotter` are concrete implementations bound to their venue config at construction time, registered with the Dispatcher via a `map[string]Snapshotter` in `main.go`; adding a venue is one new implementation plus one map entry. Every other stage (Dispatcher, Pathfinder, Evaluator) is a concrete struct or pure function — abstractable later if real flexibility shows up.
 
 Downstream `for x := range stage.Out()` loops terminate naturally when the upstream `Run` returns — no separate done-channel, no signalling protocol on top of the channel send. The Subscriber close-on-defer guarantees this even on the ctx-cancel exit path.
 
@@ -181,9 +163,6 @@ A handful of places where boundary checks earn their keep — each one motivated
 
 - **Cross-venue size alignment in the Pathfinder.** Within a single venue, `Buy[i].Size == Sell[i].Size` by adapter construction — both slices are written in the same loop. Across venues, that index correspondence is a *system* invariant (both Snapshotters are constructed with the same `tradeSizes` slice in `cmd/arbd`), not a *contract* on `pricing.Quotes` itself. The Pathfinder verifies both `len(r.Buy) == len(other.Buy)` and each `r.Buy[i].Size.Equal(other.Buy[i].Size)` before pairing; mismatches log a structured WARN and skip rather than silently producing mis-paired candidates. Belt-and-braces against a future venue whose configured size set drifts from the others'.
 - **Gas units come from QuoterV2, not a constant.** Each per-call `gasEstimate` slot in QuoterV2's return tuple is the contract's own simulation against the current pool state. The Pathfinder sums the two legs onto each `CandidatePath`, so the Evaluator uses real per-trade gas (≈95k for 1 ETH at the current pool, ≈125k for 100 ETH as more ticks cross) rather than the rule-of-thumb 150k that ships in most arbitrage examples.
-- **Breaker `IsSuccessful` distinguishes caller cancellation from provider slowness.** `context.Canceled` is skipped — we cancelled the call ourselves (SIGTERM mid-flight), nothing about the dependency went wrong. `context.DeadlineExceeded` IS counted as a failure — the provider didn't respond inside our configured timeout, which is exactly the health signal we want the breaker to act on. Gobreaker's default ("any error counts") would have produced cosmetic breaker trips at shutdown for clean SIGTERM exits.
-- **5xx classified at the transport.** Go's `http.RoundTripper` semantics return `(resp_500, nil)` — a 5xx response is not surfaced as a Go error. The breaker transport explicitly maps 5xx into a sentinel failure so the breaker counts it; the sentinel is swallowed on the way out so retryablehttp still sees the response and applies its own retry policy. Without this, a server returning constant 500s would never trip the breaker because the breaker would see only successful (resp, nil) returns from the inner round-tripper.
-- **Execution-reverted is permanent in the retry classifier.** Contract reverts are deterministic — the same input produces the same revert. The Uniswap retry path returns `backoff.Permanent` when the underlying error message contains "execution reverted" / "invalid opcode" / "out of gas" / "insufficient funds", so the retry layer doesn't burn budget on a known-unchanging outcome. Other JSON-RPC errors (transient server issues, network blips) retry normally.
 
 ---
 
@@ -196,19 +175,6 @@ A core architectural rule shapes the adapter contracts: **downstream code never 
 - **Per-row `Quote.Err` carries depth-exhaustion alongside successful sizes.** A venue snapshot can succeed overall but have one size that exceeded available orderbook depth — that row's `Err` is set, others remain valid. Downstream consumers iterate without losing the partial result. The same "errors flow alongside successes" pattern recurses at the `VenueResult` layer (per-venue failures inside a per-block fan-out) and at the alert layer (the structured slog event always fires; the multi-line block is optional).
 
 A grep for `binance` or `uniswap` in the downstream packages (`pathfinder/`, `arbitrage/`, `pricing/`) returns zero hits — venue identity is just a string label on `VenueResult` and `CandidatePath`, used for alert formatting but never branched on.
-
----
-
-## Emergent design in practice
-
-Types and abstractions are extracted at the moment composition forces them, not in anticipation. A few concrete examples from how the build actually went:
-
-- **`internal/pricing/` was extracted at step 2**, when the Uniswap adapter started producing values shaped like the Binance one. Defining a shared `Quote` / `Quotes` type at step 1 would have been guessing what shape the DEX side would need; at step 2 the constraints from both producers were already known, and the unified type captured what they actually had in common.
-- **The `Sink` interface in `internal/alert/` was created at step 7 and deleted within the same step.** With one consumer (`cmd/arbd`'s `consume`) and one implementation (`TextSink`), the interface was speculation about a hypothetical second sink. Also wrong-handed — the interface lived in the implementation package, not at the consumer. Deleted; `consume` takes `*alert.TextSink` directly. When a Slack sink or a Prometheus exporter shows up, the interface goes in the consumer (`cmd/arbd`), not the implementation package.
-- **`PoolETHUSDC03` and `feeTier03Percent` were deleted in step 7** once the pool fee became env-driven. The constant had existed as a default Pool template, but arbd's wiring took `PoolETHUSDC03` only to overwrite `.Fee` with the env value — making the "03" in its name actively misleading. Now both `cmd/arbd` and `probe-uniswap` construct the Pool inline from the exported `WETH` / `USDC` token constants plus the env-driven fee, and the misnamed wrapper is gone.
-- **The resilience layer's reshape in step 6** (covered in [`Why HTTP-transport layer, not the Snapshotter`](#why-http-transport-layer-not-the-snapshotter) above) is the largest example: the Snapshotter-level shape was wired end-to-end before the misalignment with the venue's actual quota and the breaker-vs-partial-results granularity surfaced. The architectural decision ("resilience as middleware") didn't change; the implementation found a sharper expression of it once the trade-offs were concrete.
-
-The pattern: keep the production code as honest as possible about what's actually known. When a wrapper, interface, or named default stops earning its keep — because the call site changed, or a hypothesised second use case didn't materialise — delete it rather than maintain it.
 
 ---
 
@@ -269,8 +235,8 @@ All four items live in `internal/resilience/`, composed into a single `*http.Cli
 | Sub-requirement | Status |
 |---|---|
 | Clear separation of concerns | The package layout mirrors the responsibility chart: `internal/chain/` (block subscription), `internal/cex/binance/` + `internal/dex/uniswapv3/` (raw adapters), `internal/pipeline/` (per-block fan-out + Snapshotter interface), `internal/pathfinder/` (correlation), `internal/arbitrage/` (cost model — pure), `internal/alert/` (output formatting), `internal/resilience/` (cross-cutting). `cmd/arbd/` is the only package that knows how the pieces fit together |
-| Well-defined interfaces | One unification seam (`Snapshotter`) plus two configuration seams (`*http.Client` via `resilience.NewHTTPClient`, `BreakerConfig.OnStateChange`). Other components stay concrete — abstracting them would add noise without enabling real flexibility. See [Interface seams in code](#interface-seams-in-code) above |
-| Error types and handling | Per-row `pricing.Quote.Err` (depth exhaustion at a specific size); per-venue `pipeline.VenueResult.Err` (HTTP timeout, RPC error); `backoff.Permanent` to opt out of retry on deterministic outcomes (execution reverted, etc.). Errors flow alongside successes at every layer — partial results survive |
+| Well-defined interfaces | One unification seam (`Snapshotter`) plus two configuration seams (`*http.Client` via `resilience.NewHTTPClient`, `BreakerConfig.OnStateChange`). Other components stay concrete — abstracting them would add noise without enabling real flexibility |
+| Error types and handling | Per-row `pricing.Quote.Err` (depth exhaustion at a specific size); per-venue `pipeline.VenueResult.Err` (HTTP timeout, RPC error). Errors flow alongside successes at every layer — partial results survive |
 | Testability | 87.5% statement coverage on `internal/` (cmd/ excluded as wiring; exercised by live smoke tests per phase); race detector in CI; the decoupled package layout means every component is unit-testable in isolation. The pure packages (`pricing/`, `pathfinder/`, `arbitrage/`) are particularly inexpensive to test thoroughly |
 
 ---

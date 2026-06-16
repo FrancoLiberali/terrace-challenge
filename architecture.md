@@ -10,10 +10,12 @@ The architecture is deliberately a **single Go process** with no message broker 
 
 - [High-level overview](#high-level-overview)
 - [Component responsibilities](#component-responsibilities)
-- [Data flow](#data-flow)
 - [Design decisions](#design-decisions)
   - [1. The Block Subscriber is the only producer](#1-the-block-subscriber-is-the-only-producer)
   - [2. Block dispatch: streaming over synchronous coordination](#2-block-dispatch-streaming-over-synchronous-coordination)
+    - [Chosen: streaming Dispatcher (`internal/pipeline`)](#chosen-streaming-dispatcher-internalpipeline)
+    - [Alternative: synchronous Coordinator with cancel-on-supersession](#alternative-synchronous-coordinator-with-cancel-on-supersession)
+    - [Other alternatives considered](#other-alternatives-considered)
   - [3. Adapters emit a unified effective-price shape](#3-adapters-emit-a-unified-effective-price-shape)
   - [4. Adapters own multi-size handling internally](#4-adapters-own-multi-size-handling-internally)
   - [5. Path discovery is separate from profitability evaluation](#5-path-discovery-is-separate-from-profitability-evaluation)
@@ -27,7 +29,6 @@ The architecture is deliberately a **single Go process** with no message broker 
   - [Horizontal scaling per adapter](#horizontal-scaling-per-adapter)
   - [Pathfinder and Evaluator as stateless consumers](#pathfinder-and-evaluator-as-stateless-consumers)
   - [Multi-feature evolution: stateful market graph + per-service derived state](#multi-feature-evolution-stateful-market-graph--per-service-derived-state)
-  - [State and history store](#state-and-history-store)
   - [Observability stack](#observability-stack)
   - [Other production concerns](#other-production-concerns)
 
@@ -41,7 +42,7 @@ The system is built around the **synchronized snapshot per block** pattern motiv
 2. The snapshot coordinator dispatches one unit of work to each registered venue adapter in parallel — *"produce effective prices for this pair at the configured trade sizes."*
 3. Each adapter handles its venue's optimal access pattern internally (the CEX does one fetch and walks the book per size; the DEX does one simulated swap per size) and returns a **unified effective-price list** — the same shape from both venues, slippage-aware, fee-adjusted.
 4. The Pathfinder enumerates **candidate paths** from the paired effective-price data — each path is a fully-specified prospective arbitrage trade (size, buy venue, sell venue, observed prices).
-5. The Profitability Evaluator applies CEX trading fees and gas estimates to each candidate, and emits a structured opportunity when the net spread crosses the configured threshold.
+5. The Profitability Evaluator applies the gas estimate to each candidate (CEX trading fees and DEX pool fees are already folded into the effective prices at the adapter boundary, per step 3) and emits a structured opportunity when the net spread crosses the configured threshold.
 6. The output sink formats and emits each opportunity.
 
 Pricing math (orderbook walking, quote-to-unit-price conversion) sits within the adapter layer as a shared concern — applied by each adapter as part of producing its output, not as a separate pipeline stage between adapters and detector. The shape that emerges at the adapter boundary is the unified one; nothing downstream needs to perform further normalization.
@@ -51,8 +52,7 @@ Pricing math (orderbook walking, quote-to-unit-price conversion) sits within the
 │                          BLOCK SUBSCRIBER                              │
 │              (WebSocket to Ethereum, newHeads stream)                  │
 │                                                                        │
-│   Wrapped in: reconnect-with-backoff, last-block tracking,             │
-│               heartbeat detection, HTTP polling fallback               │
+│   Wrapped in: reconnect-with-backoff                                   │
 └────────────────────────────────┬───────────────────────────────────────┘
                                  │   tick: block event
                                  ▼
@@ -64,9 +64,6 @@ Pricing math (orderbook walking, quote-to-unit-price conversion) sits within the
                   │  "effective prices for this  │
                   │   pair at these sizes."      │
                   │                              │
-                  │  Owns per-block context and  │
-                  │  cancels in-flight work when │
-                  │  a newer block arrives.      │
                   └────┬─────────────────────┬───┘
                        │                     │
               ┌────────▼─────────┐  ┌────────▼─────────┐
@@ -114,7 +111,6 @@ Pricing math (orderbook walking, quote-to-unit-price conversion) sits within the
                   │   PROFITABILITY EVALUATOR    │
                   │                              │
                   │  Per candidate path:         │
-                  │   • Apply CEX trading fee    │
                   │   • Subtract estimated gas   │
                   │   • If net ≥ threshold,      │
                   │     emit Opportunity         │
@@ -143,60 +139,17 @@ Pricing math (orderbook walking, quote-to-unit-price conversion) sits within the
 
 | Component | Owns | Doesn't touch |
 |---|---|---|
-| **Block Subscriber** | WebSocket lifecycle, reconnect logic, block-number monotonicity, gap recovery, fallback to HTTP polling | Anything venue-specific |
-| **Snapshot Coordinator** | Per-tick dispatch of one unit of work per adapter, paired fan-in, per-block timeout, backpressure policy | Pricing math, business rules, venue-specific access patterns |
+| **Block Subscriber** | WebSocket lifecycle, reconnect-with-backoff | Anything venue-specific |
+| **Snapshot Coordinator** | Per-tick fan-out of one unit of work per adapter, per-call timeout on each Snapshot | Pricing math, business rules, venue-specific access patterns, pairing results across venues |
 | **CEX Adapter (Binance)** | Fetching the orderbook, walking it for each configured `(size, side)`, producing the unified effective-price list | DEX, Ethereum, what counts as "profitable" |
 | **DEX Adapter (Uniswap V3)** | Issuing one simulated swap per configured size, converting each quote to a per-unit effective price, producing the unified effective-price list | CEX, blockchain subscription, what counts as "profitable" |
-| **Pathfinder** | Enumerating candidate paths from the paired effective-price data. Each path is a fully-specified prospective arbitrage trade (size, buy venue, sell venue, observed prices). At current scope this is simple pairing; the abstraction extends naturally to multi-venue and multi-hop routing without disturbing downstream cost logic. | Costs, fees, thresholds |
-| **Profitability Evaluator** | Applying the cost model (CEX trading fee, gas estimate) to each candidate path, evaluating against the configured threshold, and constructing the `Opportunity` when it qualifies | How the path was discovered, how data was fetched |
+| **Pathfinder** | Enumerating candidate paths from the paired effective-price data. Each path is a fully-specified prospective arbitrage trade (size, buy venue, sell venue, observed prices). At current scope this is straightforward pairing by `(size, side)`; any entry that has no counterpart on the other venue (e.g., a partial venue failure) is logged and skipped, not crashed. The abstraction extends naturally to multi-venue and multi-hop routing without disturbing downstream cost logic. | Costs, fees, thresholds |
+| **Profitability Evaluator** | Subtracting the gas estimate from each candidate path's gross profit, evaluating against the configured threshold, and constructing the `Opportunity` when it qualifies (venue trading fees are already folded into the effective prices at the adapter boundary) | How the path was discovered, how data was fetched |
 | **Output Sink** | Formatting and emitting alerts | Detection logic |
 | **Resilience middleware** | Rate limiting, circuit breaking, retries, backoff with jitter | Domain logic |
 | **Pricing math (shared concern)** | Slippage-aware walk-the-book and quote-to-unit-price conversion, applied within each adapter as part of producing the unified shape | I/O, orchestration, opportunity decisions |
 
 The separation makes the architecture testable: the Pathfinder, the Profitability Evaluator, and the pricing math are all **pure functions** over data structures, trivially unit-tested in isolation. Adapters are isolated behind interfaces and can be mocked at the seam. The Block Subscriber is the only piece with messy real-world concerns and is correspondingly the most carefully tested.
-
----
-
-## Data flow
-
-```
-Block Subscriber ─── block event ──► Snapshot Coordinator
-                                            │
-                                            │  dispatch in parallel,
-                                            │  one unit of work per adapter:
-                                            │  "produce effective prices for
-                                            │   this pair at these sizes"
-                                            │
-                       ┌────────────────────┴────────────────────┐
-                       ▼                                         ▼
-              CEX Adapter (Binance)                  DEX Adapter (Uniswap V3)
-              ┌──────────────────────┐               ┌──────────────────────┐
-              │ 1 orderbook fetch    │               │ N simulated swaps    │
-              │ + walk the book for  │               │   (one per size)     │
-              │   each (size, side)  │               │ + convert each quote │
-              │   to effective price │               │   to per-unit price  │
-              └──────────┬───────────┘               └──────────┬───────────┘
-                         │                                      │
-                         │  unified effective-price list        │
-                         │                                      │
-                         └──────────────────┬───────────────────┘
-                                            │  fan-in: paired prices for block
-                                            ▼
-                                       Pathfinder
-                                  enumerate candidate paths
-                                  from the paired data
-                                            │
-                                            │  list of candidate paths
-                                            ▼
-                                Profitability Evaluator
-                                  apply fees + gas,
-                                  emit Opportunity ≥ threshold
-                                            │
-                                            ▼
-                                       Output Sink
-```
-
-Both adapters return the same shape: a list of effective prices, each entry tagged with venue, pair, size, side, and the per-unit price (slippage- and fee-applied). The Pathfinder consumes the two lists from a given block and produces candidate paths — at the current 2-venue scope, this is straightforward pairing by `(size, side)`. The Profitability Evaluator then applies the cost model to each candidate and emits opportunities that clear the threshold. Anything not pairable by the Pathfinder (e.g., a CEX entry without a matching DEX entry due to a partial failure) is logged and skipped, not crashed.
 
 > The Go package layout and the locations of the interface seams in code are documented separately in [`implementation.md`](./implementation.md) to keep this document focused on architecture.
 
@@ -229,6 +182,8 @@ The Dispatcher fans block events out to per-venue Snapshotters and forwards thei
 - **Strict freshness ("only the latest block ever surfaces") is not enforced** by the Dispatcher. The publisher of a broker `blocks` topic cannot reach into subscriber processes to cancel in-flight work, so a Dispatcher that mirrors that constraint cannot cancel either. Stale results from block N may appear after block N+1's results have already gone out.
 - The synchronous correctness invariant must be re-implemented downstream if needed (see below).
 
+The cost we accept: freshness is not enforced today. If it becomes important, the natural place is a Pathfinder freshness filter (Step 5) — the Pathfinder already tracks the latest block it has seen, so dropping older results is a one-line addition. A stateful-Snapshotter wrapper (subscriber-side cancellation) is also possible as a decorator, but the Pathfinder filter is the load-bearing fix because race windows let stale results slip past any subscriber-side cancel.
+
 #### Alternative: synchronous Coordinator with cancel-on-supersession
 
 The Coordinator reads BlockEvents, fans out to each adapter, `wg.Wait()`s for all of them, and emits a single paired `Snapshot{Block, CEX, DEX, CEXErr, DEXErr}`. Each block has its own context; arrival of block N+1 cancels block N's context, aborting in-flight calls.
@@ -244,16 +199,6 @@ The Coordinator reads BlockEvents, fans out to each adapter, `wg.Wait()`s for al
 - **Wait-for-slowest** scales poorly: at N venues, the slowest gates the others. Acceptable at 2; degraded at 5+.
 - **Does not migrate to a broker shape** without restructuring — the whole `wg.Wait` + central-emit pattern is a single-process artifact.
 
-#### Why we picked streaming
-
-Three reasons, in order of weight:
-
-1. **The challenge's "multi-venue extension" discussion point is real.** Choosing streaming means the answer to "how would you scale to N venues?" is "the architecture already does this; here's how." Synchronous-only would force a hypothetical answer.
-2. **Per-venue latency independence is a genuine runtime benefit**, not just a future-proofing argument. As soon as one venue's API degrades (Binance rate limit, Alchemy lag), the streaming design keeps the other venue's results flowing.
-3. **Alignment with the broker section of this document.** The production-scale design described later in this doc replaces the in-process Pipeline with a broker pub/sub. The streaming shape mirrors that data flow; the synchronous Coordinator does not. Keeping them aligned avoids a future "rewrite the dispatch layer when you add a broker."
-
-The cost we accept: freshness is not enforced today. If it becomes important, the natural place is a Pathfinder freshness filter (Step 5) — the Pathfinder already tracks the latest block it has seen, so dropping older results is a one-line addition. A stateful-Snapshotter wrapper (subscriber-side cancellation) is also possible as a decorator, but the Pathfinder filter is the load-bearing fix because race windows let stale results slip past any subscriber-side cancel.
-
 #### Other alternatives considered
 
 - *Queue both, process in order* (no cancellation, no streaming): avoids losing data but creates a snowballing backlog under sustained slowness and serves alerts that no longer represent the current market.
@@ -265,7 +210,7 @@ Both adapters produce the **same output type**: a list of effective prices, one 
 
 The pricing math itself (walking the book, dividing raw amounts) is a shared concern within the adapter layer, applied by each adapter as part of producing its output. It is not a separate pipeline stage: the math is centralized and conceptually shared between both adapters, but it is exercised inside each adapter so the data emerging at the adapter boundary is already in the canonical shape.
 
-**Each adapter holds its own venue-specific fee schedule** (e.g., `binance.Symbol.TakerFeeBps`); the downstream cost model does NOT carry a venue-fee map. This keeps adapter contracts symmetric — Buy prices are the price you actually pay per unit, Sell prices the price you actually receive — and means adding a new venue is a self-contained change inside one package. It also makes the design graph-ready: in the multi-feature evolution described later in this document, each edge already carries its true effective rate, so algorithms can compose paths without needing per-venue cost knowledge.
+**Each adapter holds its own venue-specific fee schedule**; the downstream cost model does NOT carry a venue-fee map. This keeps adapter contracts symmetric — Buy prices are the price you actually pay per unit, Sell prices the price you actually receive — and means adding a new venue is a self-contained change inside one package. It also makes the design graph-ready: in the multi-feature evolution described later in this document, each edge already carries its true effective rate, so algorithms can compose paths without needing per-venue cost knowledge.
 
 Gas is intentionally NOT folded into Price because it is per-transaction, not per-unit; it travels alongside the price on each Quote (and is summed across legs on the CandidatePath) so the Evaluator can apply it once at the path level.
 
@@ -332,9 +277,8 @@ The architecture above is correct for the scope of this challenge. It is deliber
 | **Single process** | All components share one address space and communicate in-process | At higher load, the WebSocket consumer and the adapter pool would contend for the same runtime resources. With multiple venues and pairs, a single process would saturate. |
 | **No message broker** | The block subscriber speaks directly to one coordinator in the same process | A broker buys: durability across restarts, replay for backfill, multiple independent consumer groups, horizontal scaling of adapters |
 | **No horizontal scaling** | Cannot run two instances safely; both would duplicate API calls and double the rate-limit footprint | The system has no leader election, no shard assignment, no deduplication of work across instances |
-| **In-memory state only** | Last-processed block lives in process memory; restart loses it | A restart re-subscribes from the latest block, missing any blocks in the gap. Persisting the last-processed block to disk would let us resume cleanly. |
+| **No cursor, no backfill across restarts** | The `newHeads` subscription delivers only blocks emitted after subscription time; there is no on-disk cursor and no replay path | A restart silently skips any blocks that landed during the downtime. Acceptable for a detection-only system; a trading version would need a cursor + `eth_getBlockByNumber` replay to fill the gap |
 | **Caching stubbed** | No L1 cache for pool state or gas prices | Every block triggers a fresh `eth_call`; redundant under heavy querying. With caching, identical queries within the same block window would short-circuit. |
-| **Circuit breaker as middleware skeleton, not configured per adapter** | The interface exists; concrete failure thresholds and recovery policies are left as TODOs | The system would still flap during sustained provider outages. A real config would tune trip thresholds per dependency. |
 | **No tracing / metrics export** | Structured logs only; no Prometheus, no OpenTelemetry | An operator must grep logs to debug. Cannot answer "what's our p99 RPC latency?" without instrumentation. |
 | **No persistence of opportunities** | Each detection is emitted and forgotten | Cannot answer "how many arb opportunities have we detected today?" without an external log aggregator capturing the stdout stream |
 | **Single in-process snapshot coordinator** | All per-block work is paired in a single in-process fan-out / fan-in | Acceptable at 1 venue × 1 venue. With 10 venues, the coordinator becomes a serialization point and would itself need to be partitioned. |
@@ -432,13 +376,6 @@ The thing that does not scale in the present single-feature design is the explic
 **Each algorithm or feature owns its own derived state.** The thing shared across services is the broker event stream, not a single graph instance. Each consumer materializes the projection of the graph that's optimized for its query pattern — the arb detector indexes cycles, the router indexes adjacency lists, the price oracle indexes per-pair mid-prices, the archive appends-only — all from the same upstream stream of normalized market-data events. This keeps the failure and scaling boundaries per-feature: any service can be scaled, redeployed, or rebuilt from the event log without touching the others.
 
 The dispatcher / `pricing.Quote` / per-venue snapshotter shapes carry over unchanged into that world; the Pathfinder shape is the part that gets replaced.
-
-### State and history store
-
-Two persistent stores would be added:
-
-- **Operational state** (PostgreSQL or Redis): last-processed block per chain, current circuit-breaker states, rate-limit counters. Survives restarts.
-- **Detection history** (time-series DB such as ClickHouse, or append-only Postgres): every detected opportunity, every snapshot, every rejected near-miss. Enables analytics ("what's our detection rate by hour?", "which venues consistently provide the best DEX side?") and supports backtesting.
 
 ### Observability stack
 

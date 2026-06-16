@@ -24,17 +24,32 @@ The order below is intentional — it mirrors how I approached the challenge, an
 
 Real output captured from arbd running against mainnet — included so you can see the bot working without running it yourself.
 
-### Healthy run
+### Healthy run (with `LOG_LEVEL=DEBUG`)
+
+`DEBUG` surfaces a structured record per evaluated candidate so a reviewer can see *what the bot looked at* even when nothing clears the threshold — every (size, direction) pair, the computed prices, the net profit, and the boolean decision:
 
 ```
-time=2026-06-15T18:30:12.401-03:00 level=INFO msg="arbd starting" venues="[binance uniswap]" pair=ETH-USDC uniswap_pool_fee=3000 threshold_usdc=1
+time=2026-06-15T20:30:04.054-03:00 level=INFO msg="arbd starting" venues="[binance uniswap]" pair=ETH-USDC uniswap_pool_fee=3000 threshold_usdc=1
 arbd: detecting CEX↔DEX arbitrage on ETH-USDC (binance + uniswap v3 fee=3000)
       threshold: net profit > $1 USDC — Ctrl+C to stop
 
-time=2026-06-15T18:30:30.118-03:00 level=INFO msg="evaluation finished" total_candidates=12 profitable=0
+time=2026-06-15T20:30:13.246-03:00 level=DEBUG msg="performing request" method=GET url="https://api.binance.com/api/v3/depth?symbol=ETHUSDC&limit=100"
+time=2026-06-15T20:30:13.246-03:00 level=DEBUG msg="performing request" method=POST url=https://eth-mainnet.g.alchemy.com/v2/<key>
+time=2026-06-15T20:30:13.246-03:00 level=DEBUG msg="performing request" method=POST url=https://eth-mainnet.g.alchemy.com/v2/<key>
+time=2026-06-15T20:30:13.246-03:00 level=DEBUG msg="performing request" method=POST url=https://eth-mainnet.g.alchemy.com/v2/<key>
+time=2026-06-15T20:30:13.246-03:00 level=DEBUG msg="performing request" method=POST url=https://eth-mainnet.g.alchemy.com/v2/<key>
+time=2026-06-15T20:30:13.246-03:00 level=DEBUG msg="performing request" method=POST url=https://eth-mainnet.g.alchemy.com/v2/<key>
+time=2026-06-15T20:30:13.247-03:00 level=DEBUG msg="performing request" method=POST url=https://eth-mainnet.g.alchemy.com/v2/<key>
+time=2026-06-15T20:30:13.813-03:00 level=DEBUG msg="evaluated candidate" block=25326202 direction=uniswap→binance size_eth=1 buy_price_usdc=1796.13155 sell_price_usdc=1786.4730387 net_profit_usdc=-9.66819003150290817362105 profitable=false
+time=2026-06-15T20:30:13.813-03:00 level=DEBUG msg="evaluated candidate" block=25326202 direction=binance→uniswap size_eth=1 buy_price_usdc=1790.17839 sell_price_usdc=1785.265081 net_profit_usdc=-4.92419480128204680835724 profitable=false
+time=2026-06-15T20:30:13.813-03:00 level=DEBUG msg="evaluated candidate" block=25326202 direction=uniswap→binance size_eth=10 buy_price_usdc=1796.6115899 sell_price_usdc=1786.3284759075 net_profit_usdc=-102.8417898557722858981432664 profitable=false
+time=2026-06-15T20:30:13.813-03:00 level=DEBUG msg="evaluated candidate" block=25326202 direction=binance→uniswap size_eth=10 buy_price_usdc=1790.17839 sell_price_usdc=1784.7896989 net_profit_usdc=-53.90114868621206598942275 profitable=false
+time=2026-06-15T20:30:13.813-03:00 level=DEBUG msg="evaluated candidate" block=25326202 direction=uniswap→binance size_eth=100 buy_price_usdc=1801.42612455 sell_price_usdc=1786.07419098696 net_profit_usdc=-1535.2074002095825214919518967 profitable=false
+time=2026-06-15T20:30:13.813-03:00 level=DEBUG msg="evaluated candidate" block=25326202 direction=binance→uniswap size_eth=100 buy_price_usdc=1790.45828685724 sell_price_usdc=1780.05114663 net_profit_usdc=-1040.72840567597618155736724372508 profitable=false
+time=2026-06-15T20:30:17.947-03:00 level=INFO msg="evaluation finished" total_candidates=6 profitable=0
 ```
 
-Steady state on mainnet today: CEX–DEX spreads on ETH-USDC don't clear the trading fees + gas budget, so the threshold filter correctly suppresses every candidate. Setting `PRETTY_ALERTS=false` swaps both the banner and the structured logs to JSON for log-aggregator ingestion.
+Steady state on mainnet today: CEX–DEX spreads on ETH-USDC don't clear the trading fees + gas budget, so the threshold filter correctly suppresses every candidate — but the DEBUG lines show *exactly* what the bot looked at and what the math came out to. The `performing request` lines come from the underlying HTTP retry transport (one per outbound call: 1 to Binance's `/api/v3/depth`, 6 to the Uniswap RPC for the 6 `eth_call`s) and are kept at DEBUG so production logs stay quiet. Setting `PRETTY_ALERTS=false` swaps both the banner and the structured logs to JSON for log-aggregator ingestion.
 
 ### Sample alert
 

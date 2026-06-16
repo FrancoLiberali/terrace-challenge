@@ -172,18 +172,18 @@ A production trading version would either maintain an explicit gas float — mon
 
 ---
 
-## 8. Trading fees use a hardcoded schedule, not the operator's live per-account rate
+## 8. Trading fee is a single static config value, not the operator's live per-account rate
 
-The Binance taker fee is encoded as **10 bps (0.1%)** on `binance.Symbol.TakerFeeBps` — the [published default Spot fee](https://www.binance.com/en/fee/schedule) for a Regular User. This is a defensible default but does not match every operator's actual fee:
+The Binance taker fee is a single static config value (`binance.taker_fee_bps` in `config.yaml`, defaulting to **10 bps / 0.1%** — the [published Spot taker fee](https://www.binance.com/en/fee/schedule) for a Regular User). Pulling the value out of code into config is an improvement over a hardcoded constant — an operator can edit one line to match their own published rate without rebuilding — but it remains a single, static value, so it still does not match what every operator actually pays at every moment:
 
 - **BNB discount**: holding BNB and enabling the discount toggle drops the taker fee to 7.5 bps (25% off).
 - **VIP tier**: high-volume accounts (≥ $50M monthly volume) step down through VIP 1–9, with VIP 9 paying as little as 2.4 bps.
-- **Per-market variation**: stablecoin-only pairs (e.g. USDC-USDT) often carry 0 bps; new listings may carry promotional rates. The constant lives per-`Symbol` precisely so each market can carry a different value, but every value is still hardcoded — there is no live discovery.
-- **Schedule changes over time**: Binance revises its fee tiers periodically; the constant captures the schedule as of writing.
+- **Per-market variation**: stablecoin-only pairs (e.g. USDC-USDT) often carry 0 bps; new listings may carry promotional rates. The bot only watches one market today, so this is latent rather than actively wrong — but the moment a second Binance market is added, a single config knob can no longer encode their distinct fees.
+- **Schedule changes over time**: Binance revises its fee tiers periodically; a static config captures the schedule as of the last edit.
 
-The bias is consistently **conservative**: the detector assumes the operator pays the highest documented rate, so the bot under-reports profit (missing opportunities a discounted operator could actually capture) rather than over-reports.
+The bias is consistently **conservative**: the detector assumes the operator pays the published default rate, so the bot under-reports profit (missing opportunities a discounted operator could actually capture) rather than over-reports.
 
-The `Symbol.TakerFeeBps` field is the seam for a more accurate source. A production-grade adapter would fetch the operator's actual taker fee at startup via Binance's `/sapi/v1/asset/tradeFee` endpoint and refresh it periodically — the only change needed elsewhere is replacing the hardcoded constant with the fetched value.
+The config knob is the seam for a more accurate source. A production-grade adapter would fetch the operator's actual taker fee at startup via Binance's `/sapi/v1/asset/tradeFee` endpoint and refresh it periodically — the only change needed elsewhere is replacing the static config value with the fetched value at adapter-construction time.
 
 ---
 
