@@ -14,7 +14,6 @@ For the conceptual architecture (what components exist, how they relate, the des
 - [Resilience composition pattern](#resilience-composition-pattern)
 - [Defensive correctness at boundaries](#defensive-correctness-at-boundaries)
 - [Encapsulation: venue specifics stay in the adapter](#encapsulation-venue-specifics-stay-in-the-adapter)
-- [Emergent design in practice](#emergent-design-in-practice)
 - [Senior Engineer Requirements: what we addressed and what we deferred](#senior-engineer-requirements-what-we-addressed-and-what-we-deferred)
 - [Numeric types for financial math](#numeric-types-for-financial-math)
 
@@ -176,19 +175,6 @@ A core architectural rule shapes the adapter contracts: **downstream code never 
 - **Per-row `Quote.Err` carries depth-exhaustion alongside successful sizes.** A venue snapshot can succeed overall but have one size that exceeded available orderbook depth — that row's `Err` is set, others remain valid. Downstream consumers iterate without losing the partial result. The same "errors flow alongside successes" pattern recurses at the `VenueResult` layer (per-venue failures inside a per-block fan-out) and at the alert layer (the structured slog event always fires; the multi-line block is optional).
 
 A grep for `binance` or `uniswap` in the downstream packages (`pathfinder/`, `arbitrage/`, `pricing/`) returns zero hits — venue identity is just a string label on `VenueResult` and `CandidatePath`, used for alert formatting but never branched on.
-
----
-
-## Emergent design in practice
-
-Types and abstractions are extracted at the moment composition forces them, not in anticipation. A few concrete examples from how the build actually went:
-
-- **`internal/pricing/` was extracted at step 2**, when the Uniswap adapter started producing values shaped like the Binance one. Defining a shared `Quote` / `Quotes` type at step 1 would have been guessing what shape the DEX side would need; at step 2 the constraints from both producers were already known, and the unified type captured what they actually had in common.
-- **The `Sink` interface in `internal/alert/` was created at step 7 and deleted within the same step.** With one consumer (`cmd/arbd`'s `consume`) and one implementation (`TextSink`), the interface was speculation about a hypothetical second sink. Also wrong-handed — the interface lived in the implementation package, not at the consumer. Deleted; `consume` takes `*alert.TextSink` directly. When a Slack sink or a Prometheus exporter shows up, the interface goes in the consumer (`cmd/arbd`), not the implementation package.
-- **`PoolETHUSDC03` and `feeTier03Percent` were deleted in step 7** once the pool fee became env-driven. The constant had existed as a default Pool template, but arbd's wiring took `PoolETHUSDC03` only to overwrite `.Fee` with the env value — making the "03" in its name actively misleading. Now both `cmd/arbd` and `probe-uniswap` construct the Pool inline from the exported `WETH` / `USDC` token constants plus the env-driven fee, and the misnamed wrapper is gone.
-- **The resilience layer's reshape in step 6** (covered in [`Why HTTP-transport layer, not the Snapshotter`](#why-http-transport-layer-not-the-snapshotter) above) is the largest example: the Snapshotter-level shape was wired end-to-end before the misalignment with the venue's actual quota and the breaker-vs-partial-results granularity surfaced. The architectural decision ("resilience as middleware") didn't change; the implementation found a sharper expression of it once the trade-offs were concrete.
-
-The pattern: keep the production code as honest as possible about what's actually known. When a wrapper, interface, or named default stops earning its keep — because the call site changed, or a hypothesised second use case didn't materialise — delete it rather than maintain it.
 
 ---
 
