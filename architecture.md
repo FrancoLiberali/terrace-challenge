@@ -14,6 +14,10 @@ The architecture is deliberately a **single Go process** with no message broker 
 - [Design decisions](#design-decisions)
   - [1. The Block Subscriber is the only producer](#1-the-block-subscriber-is-the-only-producer)
   - [2. Block dispatch: streaming over synchronous coordination](#2-block-dispatch-streaming-over-synchronous-coordination)
+    - [Chosen: streaming Dispatcher (`internal/pipeline`)](#chosen-streaming-dispatcher-internalpipeline)
+    - [Alternative: synchronous Coordinator with cancel-on-supersession](#alternative-synchronous-coordinator-with-cancel-on-supersession)
+    - [Why we picked streaming](#why-we-picked-streaming)
+    - [Other alternatives considered](#other-alternatives-considered)
   - [3. Adapters emit a unified effective-price shape](#3-adapters-emit-a-unified-effective-price-shape)
   - [4. Adapters own multi-size handling internally](#4-adapters-own-multi-size-handling-internally)
   - [5. Path discovery is separate from profitability evaluation](#5-path-discovery-is-separate-from-profitability-evaluation)
@@ -51,8 +55,7 @@ Pricing math (orderbook walking, quote-to-unit-price conversion) sits within the
 │                          BLOCK SUBSCRIBER                              │
 │              (WebSocket to Ethereum, newHeads stream)                  │
 │                                                                        │
-│   Wrapped in: reconnect-with-backoff, last-block tracking,             │
-│               heartbeat detection, HTTP polling fallback               │
+│   Wrapped in: reconnect-with-backoff                                   │
 └────────────────────────────────┬───────────────────────────────────────┘
                                  │   tick: block event
                                  ▼
@@ -64,9 +67,6 @@ Pricing math (orderbook walking, quote-to-unit-price conversion) sits within the
                   │  "effective prices for this  │
                   │   pair at these sizes."      │
                   │                              │
-                  │  Owns per-block context and  │
-                  │  cancels in-flight work when │
-                  │  a newer block arrives.      │
                   └────┬─────────────────────┬───┘
                        │                     │
               ┌────────▼─────────┐  ┌────────▼─────────┐
