@@ -114,7 +114,6 @@ Pricing math (orderbook walking, quote-to-unit-price conversion) sits within the
                   │   PROFITABILITY EVALUATOR    │
                   │                              │
                   │  Per candidate path:         │
-                  │   • Apply CEX trading fee    │
                   │   • Subtract estimated gas   │
                   │   • If net ≥ threshold,      │
                   │     emit Opportunity         │
@@ -143,12 +142,12 @@ Pricing math (orderbook walking, quote-to-unit-price conversion) sits within the
 
 | Component | Owns | Doesn't touch |
 |---|---|---|
-| **Block Subscriber** | WebSocket lifecycle, reconnect logic, block-number monotonicity, gap recovery, fallback to HTTP polling | Anything venue-specific |
-| **Snapshot Coordinator** | Per-tick dispatch of one unit of work per adapter, paired fan-in, per-block timeout, backpressure policy | Pricing math, business rules, venue-specific access patterns |
+| **Block Subscriber** | WebSocket lifecycle, reconnect-with-backoff | Anything venue-specific |
+| **Snapshot Coordinator** | Per-tick fan-out of one unit of work per adapter, per-call timeout on each Snapshot | Pricing math, business rules, venue-specific access patterns, pairing results across venues |
 | **CEX Adapter (Binance)** | Fetching the orderbook, walking it for each configured `(size, side)`, producing the unified effective-price list | DEX, Ethereum, what counts as "profitable" |
 | **DEX Adapter (Uniswap V3)** | Issuing one simulated swap per configured size, converting each quote to a per-unit effective price, producing the unified effective-price list | CEX, blockchain subscription, what counts as "profitable" |
 | **Pathfinder** | Enumerating candidate paths from the paired effective-price data. Each path is a fully-specified prospective arbitrage trade (size, buy venue, sell venue, observed prices). At current scope this is simple pairing; the abstraction extends naturally to multi-venue and multi-hop routing without disturbing downstream cost logic. | Costs, fees, thresholds |
-| **Profitability Evaluator** | Applying the cost model (CEX trading fee, gas estimate) to each candidate path, evaluating against the configured threshold, and constructing the `Opportunity` when it qualifies | How the path was discovered, how data was fetched |
+| **Profitability Evaluator** | Subtracting the gas estimate from each candidate path's gross profit, evaluating against the configured threshold, and constructing the `Opportunity` when it qualifies (venue trading fees are already folded into the effective prices at the adapter boundary) | How the path was discovered, how data was fetched |
 | **Output Sink** | Formatting and emitting alerts | Detection logic |
 | **Resilience middleware** | Rate limiting, circuit breaking, retries, backoff with jitter | Domain logic |
 | **Pricing math (shared concern)** | Slippage-aware walk-the-book and quote-to-unit-price conversion, applied within each adapter as part of producing the unified shape | I/O, orchestration, opportunity decisions |
