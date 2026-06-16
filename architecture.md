@@ -10,7 +10,6 @@ The architecture is deliberately a **single Go process** with no message broker 
 
 - [High-level overview](#high-level-overview)
 - [Component responsibilities](#component-responsibilities)
-- [Data flow](#data-flow)
 - [Design decisions](#design-decisions)
   - [1. The Block Subscriber is the only producer](#1-the-block-subscriber-is-the-only-producer)
   - [2. Block dispatch: streaming over synchronous coordination](#2-block-dispatch-streaming-over-synchronous-coordination)
@@ -146,56 +145,13 @@ Pricing math (orderbook walking, quote-to-unit-price conversion) sits within the
 | **Snapshot Coordinator** | Per-tick fan-out of one unit of work per adapter, per-call timeout on each Snapshot | Pricing math, business rules, venue-specific access patterns, pairing results across venues |
 | **CEX Adapter (Binance)** | Fetching the orderbook, walking it for each configured `(size, side)`, producing the unified effective-price list | DEX, Ethereum, what counts as "profitable" |
 | **DEX Adapter (Uniswap V3)** | Issuing one simulated swap per configured size, converting each quote to a per-unit effective price, producing the unified effective-price list | CEX, blockchain subscription, what counts as "profitable" |
-| **Pathfinder** | Enumerating candidate paths from the paired effective-price data. Each path is a fully-specified prospective arbitrage trade (size, buy venue, sell venue, observed prices). At current scope this is simple pairing; the abstraction extends naturally to multi-venue and multi-hop routing without disturbing downstream cost logic. | Costs, fees, thresholds |
+| **Pathfinder** | Enumerating candidate paths from the paired effective-price data. Each path is a fully-specified prospective arbitrage trade (size, buy venue, sell venue, observed prices). At current scope this is straightforward pairing by `(size, side)`; any entry that has no counterpart on the other venue (e.g., a partial venue failure) is logged and skipped, not crashed. The abstraction extends naturally to multi-venue and multi-hop routing without disturbing downstream cost logic. | Costs, fees, thresholds |
 | **Profitability Evaluator** | Subtracting the gas estimate from each candidate path's gross profit, evaluating against the configured threshold, and constructing the `Opportunity` when it qualifies (venue trading fees are already folded into the effective prices at the adapter boundary) | How the path was discovered, how data was fetched |
 | **Output Sink** | Formatting and emitting alerts | Detection logic |
 | **Resilience middleware** | Rate limiting, circuit breaking, retries, backoff with jitter | Domain logic |
 | **Pricing math (shared concern)** | Slippage-aware walk-the-book and quote-to-unit-price conversion, applied within each adapter as part of producing the unified shape | I/O, orchestration, opportunity decisions |
 
 The separation makes the architecture testable: the Pathfinder, the Profitability Evaluator, and the pricing math are all **pure functions** over data structures, trivially unit-tested in isolation. Adapters are isolated behind interfaces and can be mocked at the seam. The Block Subscriber is the only piece with messy real-world concerns and is correspondingly the most carefully tested.
-
----
-
-## Data flow
-
-```
-Block Subscriber ─── block event ──► Snapshot Coordinator
-                                            │
-                                            │  dispatch in parallel,
-                                            │  one unit of work per adapter:
-                                            │  "produce effective prices for
-                                            │   this pair at these sizes"
-                                            │
-                       ┌────────────────────┴────────────────────┐
-                       ▼                                         ▼
-              CEX Adapter (Binance)                  DEX Adapter (Uniswap V3)
-              ┌──────────────────────┐               ┌──────────────────────┐
-              │ 1 orderbook fetch    │               │ N simulated swaps    │
-              │ + walk the book for  │               │   (one per size)     │
-              │   each (size, side)  │               │ + convert each quote │
-              │   to effective price │               │   to per-unit price  │
-              └──────────┬───────────┘               └──────────┬───────────┘
-                         │                                      │
-                         │  unified effective-price list        │
-                         │                                      │
-                         └──────────────────┬───────────────────┘
-                                            │  fan-in: paired prices for block
-                                            ▼
-                                       Pathfinder
-                                  enumerate candidate paths
-                                  from the paired data
-                                            │
-                                            │  list of candidate paths
-                                            ▼
-                                Profitability Evaluator
-                                  apply fees + gas,
-                                  emit Opportunity ≥ threshold
-                                            │
-                                            ▼
-                                       Output Sink
-```
-
-Both adapters return the same shape: a list of effective prices, each entry tagged with venue, pair, size, side, and the per-unit price (slippage- and fee-applied). The Pathfinder consumes the two lists from a given block and produces candidate paths — at the current 2-venue scope, this is straightforward pairing by `(size, side)`. The Profitability Evaluator then applies the cost model to each candidate and emits opportunities that clear the threshold. Anything not pairable by the Pathfinder (e.g., a CEX entry without a matching DEX entry due to a partial failure) is logged and skipped, not crashed.
 
 > The Go package layout and the locations of the interface seams in code are documented separately in [`implementation.md`](./implementation.md) to keep this document focused on architecture.
 
